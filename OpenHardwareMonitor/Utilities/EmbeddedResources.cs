@@ -9,13 +9,14 @@ internal class EmbeddedResources
     public static Image GetImage(string name)
     {
         name = "OpenHardwareMonitor.Resources." + name;
-        string[] names = Assembly.GetExecutingAssembly().GetManifestResourceNames();
+        var assembly = Assembly.GetExecutingAssembly();
+        string[] names = assembly.GetManifestResourceNames();
 
         for (int i = 0; i < names.Length; i++)
         {
             if (names[i].Replace('\\', '.') == name)
             {
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(names[i]))
+                using (Stream stream = assembly.GetManifestResourceStream(names[i]))
                 {
                     // "You must keep the stream open for the lifetime of the Image."
                     Image image = Image.FromStream(stream);
@@ -36,12 +37,13 @@ internal class EmbeddedResources
     public static Icon GetIcon(string name)
     {
         name = "OpenHardwareMonitor.Resources." + name;
-        string[] names = Assembly.GetExecutingAssembly().GetManifestResourceNames();
+        var assembly = Assembly.GetExecutingAssembly();
+        string[] names = assembly.GetManifestResourceNames();
         for (int i = 0; i < names.Length; i++)
         {
             if (names[i].Replace('\\', '.') == name)
             {
-                using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(names[i]))
+                using (Stream stream = assembly.GetManifestResourceStream(names[i]))
                 {
                     return new Icon(stream);
                 }

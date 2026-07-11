@@ -64,7 +64,7 @@ internal sealed partial class MainForm : Form
         _settings = new PersistentSettings();
         _settings.Load();
 
-        MinimumSize = new Size(400, 200);
+        MinimumSize = new Size(300, 200);
         Text = Updater.ApplicationTitle;
 #if DEBUG
         Text += " (DEBUG)";
