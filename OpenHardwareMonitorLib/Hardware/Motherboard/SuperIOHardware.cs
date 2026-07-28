@@ -697,7 +697,8 @@ internal sealed class SuperIOHardware : Hardware
                         v.Add(new Voltage("CMOS Battery", 13));
 
                         t.Add(new Temperature("Chipset #2", 5));
-                        t.Add(new Temperature("Thermistor Sensor", 6));
+                        t.Add(new Temperature("Thermistor Sensor #1", 6));
+                        t.Add(new Temperature("Thermistor Sensor #2", 4));
 
                         break;
 
@@ -722,7 +723,8 @@ internal sealed class SuperIOHardware : Hardware
                         v.Add(new Voltage("CMOS Battery", 13));
 
                         t.Add(new Temperature("PCIe x1", 5));
-                        t.Add(new Temperature("Thermistor Sensor", 6));
+                        t.Add(new Temperature("Thermistor Sensor #1", 6));
+                        t.Add(new Temperature("Thermistor Sensor #2", 4));
 
                         break;
 
