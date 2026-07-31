@@ -50,6 +50,8 @@ internal sealed partial class MainForm : Form
 
     private int _delayCount;
     private bool _selectionDragging;
+    private bool _resetting;
+    private DateTime _lastPowerResetTime;
     private DateTime _nextUpdateCheckTime;
 
     public MainForm()
@@ -495,7 +497,8 @@ internal sealed partial class MainForm : Form
 
     private void PowerModeChanged(object sender, Microsoft.Win32.PowerModeChangedEventArgs eventArgs)
     {
-        if (eventArgs.Mode == Microsoft.Win32.PowerModes.Resume || _computer.IsBatteryEnabled)
+        if (eventArgs.Mode is Microsoft.Win32.PowerModes.Resume or Microsoft.Win32.PowerModes.StatusChange &&
+            _computer.IsBatteryEnabled)
         {
             if (InvokeRequired)
                 Invoke(new MethodInvoker(() => ResetClick(sender, eventArgs)));
@@ -990,12 +993,19 @@ internal sealed partial class MainForm : Form
 
     private void ResetClick(object sender, EventArgs e)
     {
+        if (_resetting || _lastPowerResetTime.AddMilliseconds(1500) > DateTime.Now)
+            return;
+
+        _resetting = true;
+        _lastPowerResetTime = DateTime.Now;
+
         // disable the fallback MainIcon during reset, otherwise icon visibility
         // might be lost
         _systemTray.IsMainIconEnabled = false;
         _computer.Reset();
         // restore the MainIcon setting
         _systemTray.IsMainIconEnabled = _minimizeToTray.Value;
+        _resetting = false;
     }
 
     private void TreeView_MouseMove(object sender, MouseEventArgs e)
