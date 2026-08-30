@@ -14,17 +14,23 @@
             <Setter Property="Padding" Value="0" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
-        <Style x:Key="CompactAppBarButtonStyle" TargetType="AppBarButton">
+        <Style x:Key="CompactToolbarButtonStyle" TargetType="Button">
             <Setter Property="Width" Value="40" />
             <Setter Property="Height" Value="36" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="IsCompact" Value="True" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
-        <Style x:Key="CompactAppBarToggleButtonStyle" TargetType="AppBarToggleButton">
+        <Style x:Key="CompactToolbarToggleButtonStyle" TargetType="ToggleButton">
             <Setter Property="Width" Value="40" />
             <Setter Property="Height" Value="36" />
             <Setter Property="Padding" Value="0" />
-            <Setter Property="IsCompact" Value="True" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
         <DataTemplate x:Key="HardwareTreeItemTemplate">
             <Grid MinHeight="20" Padding="4,0" ColumnSpacing="8" AutomationProperties.Name="{Binding Content.Title}" DoubleTapped="TreeRow_DoubleTapped">
@@ -67,13 +73,13 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <CommandBar Height="36" DefaultLabelPosition="Collapsed" Background="Transparent" BorderThickness="0">
-                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="Refresh" Label="刷新" Click="Refresh_Click" ToolTipService.ToolTip="立即刷新" />
-                <AppBarToggleButton Style="{StaticResource CompactAppBarToggleButtonStyle}" Icon="ShowResults" Label="显示隐藏的传感器" IsChecked="{Binding ShowHiddenSensors, Mode=TwoWay}" ToolTipService.ToolTip="显示隐藏的传感器" />
-                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="ViewAll" Label="全部展开" Click="ExpandAll_Click" ToolTipService.ToolTip="全部展开" />
-                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="List" Label="全部折叠" Click="CollapseAll_Click" ToolTipService.ToolTip="全部折叠" />
-            </CommandBar>
-            <TextBox Grid.Column="1" Height="30" MinHeight="30" MaxWidth="360" Padding="10,3" HorizontalAlignment="Stretch" VerticalAlignment="Center" PlaceholderText="搜索硬件或传感器" Text="{Binding SensorFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <StackPanel Height="36" Orientation="Horizontal" Spacing="2">
+                <Button Style="{StaticResource CompactToolbarButtonStyle}" Click="Refresh_Click" ToolTipService.ToolTip="立即刷新"><Viewbox Width="18" Height="18"><SymbolIcon Symbol="Refresh" /></Viewbox></Button>
+                <ToggleButton Style="{StaticResource CompactToolbarToggleButtonStyle}" IsChecked="{Binding ShowHiddenSensors, Mode=TwoWay}" ToolTipService.ToolTip="显示隐藏的传感器"><Viewbox Width="18" Height="18"><SymbolIcon Symbol="ShowResults" /></Viewbox></ToggleButton>
+                <Button Style="{StaticResource CompactToolbarButtonStyle}" Click="ExpandAll_Click" ToolTipService.ToolTip="全部展开"><Viewbox Width="18" Height="18"><SymbolIcon Symbol="ViewAll" /></Viewbox></Button>
+                <Button Style="{StaticResource CompactToolbarButtonStyle}" Click="CollapseAll_Click" ToolTipService.ToolTip="全部折叠"><Viewbox Width="18" Height="18"><SymbolIcon Symbol="List" /></Viewbox></Button>
+            </StackPanel>
+            <TextBox Grid.Column="1" Height="30" MinHeight="30" Padding="10,3" HorizontalAlignment="Stretch" VerticalAlignment="Center" PlaceholderText="搜索硬件或传感器" Text="{Binding SensorFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
         </Grid>
 
         <Border Grid.Row="1" Background="{ThemeResource AppSurfaceBrush}" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1" CornerRadius="4">
