@@ -179,7 +179,7 @@ public sealed partial class MainWindow : WindowEx
 
     private async Task HideNotificationAfterDelayAsync(int version)
     {
-        await Task.Delay(TimeSpan.FromSeconds(5.5));
+        await Task.Delay(TimeSpan.FromSeconds(5));
         if (_notificationVersion == version) HideNotification();
     }
 
