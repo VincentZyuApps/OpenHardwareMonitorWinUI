@@ -7,20 +7,52 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Style="{StaticResource PageRootStyle}">
             <StackPanel Spacing="4"><TextBlock Style="{StaticResource PageTitleStyle}" Text="图表" /><TextBlock Style="{StaticResource SecondaryTextStyle}" Text="展示已选传感器最近六分钟的内存历史。数据每次刷新后更新。" /></StackPanel>
-            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
-                <Expander Header="选择传感器">
-                    <ScrollViewer MaxHeight="240" Margin="0,12,0,0" VerticalScrollBarVisibility="Auto">
-                        <controls:ItemsRepeater ItemsSource="{Binding ChartCandidates}">
-                            <controls:ItemsRepeater.Layout><controls:UniformGridLayout MinItemWidth="260" MinItemHeight="36" MinColumnSpacing="12" MinRowSpacing="4" /></controls:ItemsRepeater.Layout>
-                            <controls:ItemsRepeater.ItemTemplate>
+            <Border Style="{StaticResource SurfaceStyle}" Padding="12">
+                <Expander Header="选择传感器" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+                    <Grid Margin="0,8,0,0">
+                        <Grid.RowDefinitions><RowDefinition Height="24" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                        <Grid Margin="0,0,16,0" Padding="6,0" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,0,0,1" ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28" />
+                                <ColumnDefinition Width="1.1*" />
+                                <ColumnDefinition Width="1.6*" />
+                                <ColumnDefinition Width="76" />
+                                <ColumnDefinition Width="112" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="传感器" />
+                            <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="硬件" />
+                            <TextBlock Grid.Column="3" VerticalAlignment="Center" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="类型" />
+                            <TextBlock Grid.Column="4" VerticalAlignment="Center" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="当前" />
+                        </Grid>
+                        <ListView Grid.Row="1" MaxHeight="260" HorizontalAlignment="Stretch" ItemsSource="{Binding ChartCandidates}" SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="MinHeight" Value="28" />
+                                    <Setter Property="Padding" Value="0" />
+                                    <Setter Property="Margin" Value="0" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <CheckBox Tag="{Binding SensorId}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Click="ChartSelection_Click" ToolTipService.ToolTip="{Binding Type}">
-                                        <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                    </CheckBox>
+                                    <Grid Height="28" Margin="0,0,16,0" Padding="6,0" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,0,0,1" ColumnSpacing="10" ToolTipService.ToolTip="{Binding FullName}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="28" />
+                                            <ColumnDefinition Width="1.1*" />
+                                            <ColumnDefinition Width="1.6*" />
+                                            <ColumnDefinition Width="76" />
+                                            <ColumnDefinition Width="112" />
+                                        </Grid.ColumnDefinitions>
+                                        <CheckBox Width="24" Height="24" MinHeight="0" Padding="0" HorizontalAlignment="Left" VerticalAlignment="Center" AutomationProperties.Name="{Binding FullName}" Tag="{Binding SensorId}" IsChecked="{Binding IsSelected, Mode=TwoWay}" Click="ChartSelection_Click" />
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center" FontSize="13" Text="{Binding SensorName}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="2" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="{Binding HardwareName}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="3" VerticalAlignment="Center" FontSize="12" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="{Binding TypeLabel}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="4" VerticalAlignment="Center" FontSize="12" FontFamily="Segoe UI Variable Text" Text="{Binding ValueText}" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
                                 </DataTemplate>
-                            </controls:ItemsRepeater.ItemTemplate>
-                        </controls:ItemsRepeater>
-                    </ScrollViewer>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
                 </Expander>
             </Border>
             <controls:ItemsRepeater ItemsSource="{Binding ChartSeries}">

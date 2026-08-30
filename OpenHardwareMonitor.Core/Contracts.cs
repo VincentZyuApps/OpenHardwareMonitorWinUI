@@ -10,6 +10,9 @@ public enum ThemePreference
 public sealed class AppSettings
 {
     public const int CurrentSchemaVersion = 3;
+    public const int MinimumHardwareColumnWidth = 64;
+    public const int DefaultHardwareColumnWidth = 112;
+    public const int MaximumHardwareColumnWidth = 160;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public ThemePreference Theme { get; set; } = ThemePreference.System;

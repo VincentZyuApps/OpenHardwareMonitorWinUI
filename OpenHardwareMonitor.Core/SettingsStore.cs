@@ -94,7 +94,10 @@ public sealed class SettingsStore
         settings.ExpandedNodes ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         settings.ColumnWidths ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var column in settings.ColumnWidths.Keys.ToArray())
-            settings.ColumnWidths[column] = Math.Clamp(settings.ColumnWidths[column], 64, 160);
+            settings.ColumnWidths[column] = Math.Clamp(
+                settings.ColumnWidths[column],
+                AppSettings.MinimumHardwareColumnWidth,
+                AppSettings.MaximumHardwareColumnWidth);
         settings.RefreshIntervalMilliseconds = Math.Clamp(settings.RefreshIntervalMilliseconds, 250, 10_000);
         settings.Window.Width = Math.Clamp(settings.Window.Width, 800, 3840);
         settings.Window.Height = Math.Clamp(settings.Window.Height, 560, 2160);

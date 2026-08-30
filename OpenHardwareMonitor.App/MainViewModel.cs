@@ -162,11 +162,16 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public double GetHardwareColumnWidth(string column) =>
-        Settings.ColumnWidths.TryGetValue(column, out var width) ? Math.Clamp(width, 64, 160) : 80;
+        Settings.ColumnWidths.TryGetValue(column, out var width)
+            ? Math.Clamp(width, AppSettings.MinimumHardwareColumnWidth, AppSettings.MaximumHardwareColumnWidth)
+            : AppSettings.DefaultHardwareColumnWidth;
 
     public void PreviewHardwareColumnWidth(string column, double width)
     {
-        Settings.ColumnWidths[column] = (int)Math.Round(Math.Clamp(width, 64, 160));
+        Settings.ColumnWidths[column] = (int)Math.Round(Math.Clamp(
+            width,
+            AppSettings.MinimumHardwareColumnWidth,
+            AppSettings.MaximumHardwareColumnWidth));
         NotifyHardwareColumnWidthsChanged();
         foreach (var item in _treeItems.Values) item.UpdateColumnVisibility(Settings);
     }
@@ -327,36 +332,14 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         RebuildDashboard(rows);
     }
 
-    private void ReconcileControlRows(IReadOnlyList<SensorRowViewModel> rows)
-    {
-        var desiredIds = rows.Select(row => row.SensorId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        for (var index = ControlRows.Count - 1; index >= 0; index--)
-        {
-            if (!desiredIds.Contains(ControlRows[index].SensorId)) ControlRows.RemoveAt(index);
-        }
-
-        for (var desiredIndex = 0; desiredIndex < rows.Count; desiredIndex++)
-        {
-            var source = rows[desiredIndex];
-            var currentIndex = -1;
-            for (var index = 0; index < ControlRows.Count; index++)
-            {
-                if (!string.Equals(ControlRows[index].SensorId, source.SensorId, StringComparison.OrdinalIgnoreCase)) continue;
-                currentIndex = index;
-                break;
-            }
-
-            if (currentIndex < 0)
-            {
-                ControlRows.Insert(desiredIndex, new ControlRowViewModel(source));
-                continue;
-            }
-
-            var target = ControlRows[currentIndex];
-            target.Update(source);
-            if (currentIndex != desiredIndex) ControlRows.Move(currentIndex, desiredIndex);
-        }
-    }
+    private void ReconcileControlRows(IReadOnlyList<SensorRowViewModel> rows) =>
+        ReconcileById(
+            ControlRows,
+            rows,
+            item => item.SensorId,
+            source => source.SensorId,
+            source => new ControlRowViewModel(source),
+            (item, source) => item.Update(source));
 
     private void RebuildHardwareTree(HardwareSnapshot snapshot)
     {
@@ -504,17 +487,65 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void RebuildChartCandidates(HardwareSnapshot snapshot)
     {
-        ChartCandidates.Clear();
-        foreach (var sensor in snapshot.Sensors.Where(item => item.Value is not null && IsSensorVisible(item))
-                     .OrderBy(item => item.HardwareName).ThenBy(item => item.Type).ThenBy(item => item.DisplayName))
-            ChartCandidates.Add(new ChartCandidateViewModel(sensor, GetSensorPresentation(sensor.Id).ShowInChart));
+        var sensors = snapshot.Sensors.Where(item => item.Value is not null && IsSensorVisible(item))
+            .OrderBy(item => item.HardwareName)
+            .ThenBy(item => item.Type)
+            .ThenBy(item => item.DisplayName)
+            .ToArray();
+        ReconcileById(
+            ChartCandidates,
+            sensors,
+            item => item.SensorId,
+            source => source.Id,
+            source => new ChartCandidateViewModel(source, GetSensorPresentation(source.Id)),
+            (item, source) => item.Update(source, GetSensorPresentation(source.Id)));
     }
 
     private void RebuildCharts(HardwareSnapshot snapshot)
     {
-        ChartSeries.Clear();
-        foreach (var sensor in snapshot.Sensors.Where(item => GetSensorPresentation(item.Id).ShowInChart).Take(8))
-            ChartSeries.Add(new ChartSeriesViewModel(sensor, _hardware.GetHistory(sensor.Id)));
+        var sensors = snapshot.Sensors.Where(item => GetSensorPresentation(item.Id).ShowInChart).Take(8).ToArray();
+        ReconcileById(
+            ChartSeries,
+            sensors,
+            item => item.SensorId,
+            source => source.Id,
+            source => new ChartSeriesViewModel(source, GetSensorPresentation(source.Id), _hardware.GetHistory(source.Id)),
+            (item, source) => item.Update(source, GetSensorPresentation(source.Id), _hardware.GetHistory(source.Id)));
+    }
+
+    private static void ReconcileById<TItem, TSource>(
+        ObservableCollection<TItem> target,
+        IReadOnlyList<TSource> sources,
+        Func<TItem, string> itemId,
+        Func<TSource, string> sourceId,
+        Func<TSource, TItem> create,
+        Action<TItem, TSource> update)
+        where TItem : class
+    {
+        var existing = new Dictionary<string, TItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in target) existing.TryAdd(itemId(item), item);
+
+        var desired = new List<TItem>(sources.Count);
+        foreach (var source in sources)
+        {
+            if (!existing.TryGetValue(sourceId(source), out var item)) item = create(source);
+            else update(item, source);
+            desired.Add(item);
+        }
+
+        var desiredItems = desired.ToHashSet(ReferenceEqualityComparer.Instance);
+        for (var index = target.Count - 1; index >= 0; index--)
+        {
+            if (!desiredItems.Contains(target[index])) target.RemoveAt(index);
+        }
+
+        for (var index = 0; index < desired.Count; index++)
+        {
+            if (index < target.Count && ReferenceEquals(target[index], desired[index])) continue;
+            var currentIndex = target.IndexOf(desired[index]);
+            if (currentIndex >= 0) target.Move(currentIndex, index);
+            else target.Insert(index, desired[index]);
+        }
     }
 
     private SensorPresentationSettings GetSensorPresentation(string sensorId)
@@ -708,7 +739,9 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
     }
 
     private static double GetColumnWidth(AppSettings settings, string column) =>
-        settings.ColumnWidths.TryGetValue(column, out var width) ? Math.Clamp(width, 64, 160) : 80;
+        settings.ColumnWidths.TryGetValue(column, out var width)
+            ? Math.Clamp(width, AppSettings.MinimumHardwareColumnWidth, AppSettings.MaximumHardwareColumnWidth)
+            : AppSettings.DefaultHardwareColumnWidth;
 
     private void ReplaceProperties(IReadOnlyDictionary<string, string> properties)
     {
@@ -810,34 +843,62 @@ public sealed class ControlRowViewModel : ObservableObject
     }
 }
 
-public sealed class ChartSeriesViewModel
+public sealed class ChartSeriesViewModel : ObservableObject
 {
-    public ChartSeriesViewModel(SensorReading sensor, IReadOnlyList<DataPoint> points)
+    private string _name = string.Empty;
+    private string _valueText = string.Empty;
+    private IReadOnlyList<DataPoint> _points = Array.Empty<DataPoint>();
+
+    public ChartSeriesViewModel(SensorReading sensor, SensorPresentationSettings presentation, IReadOnlyList<DataPoint> points)
     {
         SensorId = sensor.Id;
-        Name = sensor.HardwareName + " - " + sensor.DisplayName;
-        ValueText = sensor.Value is null ? "--" : $"{sensor.Value:0.##} {sensor.Unit}".TrimEnd();
+        Update(sensor, presentation, points);
+    }
+
+    public string SensorId { get; }
+    public string Name { get => _name; private set => SetProperty(ref _name, value); }
+    public string ValueText { get => _valueText; private set => SetProperty(ref _valueText, value); }
+    public IReadOnlyList<DataPoint> Points { get => _points; private set => SetProperty(ref _points, value); }
+
+    public void Update(SensorReading sensor, SensorPresentationSettings presentation, IReadOnlyList<DataPoint> points)
+    {
+        var sensorName = string.IsNullOrWhiteSpace(presentation.DisplayName) ? sensor.DisplayName : presentation.DisplayName;
+        Name = sensor.HardwareName + " - " + sensorName;
+        ValueText = MainViewModel.Format(sensor.Value, sensor.Unit);
         Points = points;
     }
-
-    public string SensorId { get; }
-    public string Name { get; }
-    public string ValueText { get; }
-    public IReadOnlyList<DataPoint> Points { get; }
 }
 
-public sealed class ChartCandidateViewModel
+public sealed class ChartCandidateViewModel : ObservableObject
 {
-    public ChartCandidateViewModel(SensorReading sensor, bool isSelected)
+    private string _sensorName = string.Empty;
+    private string _hardwareName = string.Empty;
+    private string _typeLabel = string.Empty;
+    private string _valueText = string.Empty;
+    private string _fullName = string.Empty;
+    private bool _isSelected;
+
+    public ChartCandidateViewModel(SensorReading sensor, SensorPresentationSettings presentation)
     {
         SensorId = sensor.Id;
-        Name = sensor.HardwareName + " - " + sensor.DisplayName;
-        Type = sensor.Type;
-        IsSelected = isSelected;
+        Update(sensor, presentation);
     }
 
     public string SensorId { get; }
-    public string Name { get; }
-    public string Type { get; }
-    public bool IsSelected { get; set; }
+    public string SensorName { get => _sensorName; private set => SetProperty(ref _sensorName, value); }
+    public string HardwareName { get => _hardwareName; private set => SetProperty(ref _hardwareName, value); }
+    public string TypeLabel { get => _typeLabel; private set => SetProperty(ref _typeLabel, value); }
+    public string ValueText { get => _valueText; private set => SetProperty(ref _valueText, value); }
+    public string FullName { get => _fullName; private set => SetProperty(ref _fullName, value); }
+    public bool IsSelected { get => _isSelected; set => SetProperty(ref _isSelected, value); }
+
+    public void Update(SensorReading sensor, SensorPresentationSettings presentation)
+    {
+        SensorName = string.IsNullOrWhiteSpace(presentation.DisplayName) ? sensor.DisplayName : presentation.DisplayName!;
+        HardwareName = sensor.HardwareName;
+        TypeLabel = MainViewModel.GetSensorTypeName(sensor.Type);
+        ValueText = MainViewModel.Format(sensor.Value, sensor.Unit);
+        FullName = $"{HardwareName} - {SensorName}";
+        IsSelected = presentation.ShowInChart;
+    }
 }
