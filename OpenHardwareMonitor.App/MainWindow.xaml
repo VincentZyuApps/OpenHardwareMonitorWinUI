@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<winuiex:WindowEx
+    x:Class="OpenHardwareMonitor.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:tb="using:H.NotifyIcon"
+    xmlns:winuiex="using:WinUIEx"
+    Title="Open Hardware Monitor WinUI"
+    MinWidth="800"
+    MinHeight="560">
+    <Grid x:Name="RootGrid" Background="{ThemeResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="28" />
+        </Grid.RowDefinitions>
+
+        <Grid x:Name="AppTitleBar" Padding="12,0,150,0" Background="{ThemeResource AppHeaderBrush}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="28" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <FontIcon VerticalAlignment="Center" FontSize="17" Glyph="&#xE950;" />
+            <StackPanel Grid.Column="1" Margin="8,0,0,0" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                <TextBlock FontFamily="Segoe UI Variable Display" FontSize="15" FontWeight="SemiBold" Text="Open Hardware Monitor" />
+                <TextBlock VerticalAlignment="Center" Foreground="{ThemeResource AppSecondaryTextBrush}" FontSize="11" Text="WinUI" />
+            </StackPanel>
+            <Button Grid.Column="2" Width="34" Height="34" Padding="0" Background="Transparent" BorderThickness="0" Click="ThemeButton_Click" ToolTipService.ToolTip="循环切换：跟随系统、浅色、深色">
+                <FontIcon FontSize="16" Glyph="&#xE706;" />
+            </Button>
+        </Grid>
+
+        <NavigationView
+            x:Name="Navigation"
+            Grid.Row="1"
+            CompactModeThresholdWidth="0"
+            CompactPaneLength="48"
+            ExpandedModeThresholdWidth="1008"
+            IsBackButtonVisible="Collapsed"
+            IsSettingsVisible="False"
+            OpenPaneLength="180"
+            PaneDisplayMode="Auto"
+            DisplayModeChanged="Navigation_DisplayModeChanged"
+            PaneOpened="Navigation_PaneOpened"
+            PaneClosed="Navigation_PaneClosed"
+            SelectionChanged="Navigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="硬件" Icon="AllApps" Tag="hardware" IsSelected="True" />
+                <NavigationViewItem Content="图表" Icon="Preview" Tag="charts" />
+                <NavigationViewItem Content="控制" Icon="Slideshow" Tag="controls" />
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem Content="设置" Icon="Setting" Tag="settings" />
+            </NavigationView.FooterMenuItems>
+            <Frame x:Name="ContentFrame" />
+        </NavigationView>
+
+        <Grid Grid.Row="2" Padding="12,0,6,0" Background="{ThemeResource AppHeaderBrush}" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center" FontSize="11" Foreground="{ThemeResource AppSecondaryTextBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="1" Width="30" Height="26" Padding="0" Background="Transparent" BorderThickness="0" Click="HideToTray_Click" ToolTipService.ToolTip="隐藏到通知区域">
+                <FontIcon FontSize="14" Glyph="&#xE74B;" />
+            </Button>
+        </Grid>
+
+        <tb:TaskbarIcon x:Name="TrayIcon" ToolTipText="Open Hardware Monitor" IconSource="/Assets/OpenHardwareMonitor.ico" NoLeftClickDelay="True" LeftClickCommand="{x:Bind ShowWindowCommand}" ContextMenuMode="SecondWindow">
+            <tb:TaskbarIcon.ContextFlyout>
+                <MenuFlyout>
+                    <MenuFlyoutItem Text="显示窗口" Command="{x:Bind ShowWindowCommand}"><MenuFlyoutItem.Icon><SymbolIcon Symbol="OpenFile" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                    <MenuFlyoutItem Text="重置最小/最大值" Command="{x:Bind ResetMinMaxCommand}"><MenuFlyoutItem.Icon><SymbolIcon Symbol="Refresh" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                    <MenuFlyoutSeparator />
+                    <MenuFlyoutItem Text="退出" Command="{x:Bind ExitCommand}"><MenuFlyoutItem.Icon><SymbolIcon Symbol="Cancel" /></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                </MenuFlyout>
+            </tb:TaskbarIcon.ContextFlyout>
+        </tb:TaskbarIcon>
+    </Grid>
+</winuiex:WindowEx>

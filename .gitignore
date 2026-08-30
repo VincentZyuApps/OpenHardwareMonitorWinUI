@@ -7,3 +7,8 @@
 .vscode/
 packages/
 FodyWeavers.xsd
+artifacts/
+*.sha256
+OpenHardwareMonitor.WinUI.json
+temp/
+tmp/

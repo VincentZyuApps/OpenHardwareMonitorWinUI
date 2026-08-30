@@ -1,0 +1,128 @@
+name: Build and Release
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      commit_message:
+        description: Commit-message trigger, for example [build-action]
+        required: true
+        default: "[build-action]"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Inspect build trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.trigger.outputs.should_build }}
+      action: ${{ steps.trigger.outputs.action }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      artifact_name: ${{ steps.version.outputs.artifact_name }}
+      asset_name: ${{ steps.version.outputs.asset_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: trigger
+        name: Classify commit trigger
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || inputs.commit_message }}
+        run: |
+          action="$(python scripts/ci/trigger.py --message "$COMMIT_MESSAGE")"
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "should_build=$([[ "$action" == "none" ]] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+      - id: version
+        if: steps.trigger.outputs.should_build == 'true'
+        name: Validate product version
+        run: |
+          version="$(python scripts/version/check.py)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=OpenHardwareMonitor-v${version}-win-x64-${GITHUB_RUN_ID}-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=OpenHardwareMonitor-${version}-win-x64.zip" >> "$GITHUB_OUTPUT"
+      - name: Reject duplicate release tags
+        if: steps.trigger.outputs.action == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/master" || { echo "[build-release] is only allowed on master." >&2; exit 1; }
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists." >&2
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists." >&2
+            exit 1
+          fi
+
+  build:
+    name: Build Windows x64
+    needs: prepare
+    if: needs.prepare.outputs.should_build == 'true'
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      ASSET_NAME: ${{ needs.prepare.outputs.asset_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Verify version
+        run: python scripts/version/check.py
+      - name: Restore
+        run: dotnet restore OpenHardwareMonitor.sln -r win-x64
+      - name: Build
+        run: dotnet build OpenHardwareMonitor.sln -c Release --no-restore
+      - name: Test
+        run: dotnet test OpenHardwareMonitor.App.Tests/OpenHardwareMonitor.App.Tests.csproj -c Release --no-build --no-restore -p:Platform=x64
+      - name: Publish self-contained app
+        run: dotnet publish OpenHardwareMonitor.App/OpenHardwareMonitor.App.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/OpenHardwareMonitor-$env:VERSION-win-x64
+      - id: bundle
+        name: Create ZIP and checksum
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "artifacts/OpenHardwareMonitor-$env:VERSION-win-x64/*" -DestinationPath "$env:ASSET_NAME" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 "$env:ASSET_NAME").Hash.ToLowerInvariant()
+          "$hash  $env:ASSET_NAME" | Set-Content "$env:ASSET_NAME.sha256" -NoNewline
+          "files=$env:ASSET_NAME,$env:ASSET_NAME.sha256" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: |
+            ${{ env.ASSET_NAME }}
+            ${{ env.ASSET_NAME }}.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    if: needs.prepare.outputs.action == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.prepare.outputs.artifact_name }}
+          path: release-files
+      - name: Create release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          printf '# Open Hardware Monitor %s\n\nWindows 10 2004+ x64 self-contained WinUI build.\n\n## Changes\n' "$VERSION" > release-notes.md
+          git log -20 --pretty=format:'- [%h](https://github.com/'"$GITHUB_REPOSITORY"'/commit/%H) %s' >> release-notes.md
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: gh release create "$TAG" release-files/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Open Hardware Monitor $VERSION" --notes-file release-notes.md --latest

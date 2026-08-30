@@ -1,9 +1,9 @@
 ﻿using System;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
-#if !NETFRAMEWORK
+#if !NETFRAMEWORK && !WINDOWS
 using Mono.Unix.Native;
-#else
+#elif NETFRAMEWORK
 using System.Reflection;
 #endif
 
@@ -245,10 +245,12 @@ internal static class OpCode
 
             if (mmap != null)
                 _codeBuffer = (IntPtr)mmap.Invoke(null, [IntPtr.Zero, _size, mmapProtsParam, mmapFlagsParam, -1, 0]);
-#else
+#elif !WINDOWS
             _codeBuffer = Syscall.mmap(IntPtr.Zero, _size,
                 MmapProts.PROT_READ | MmapProts.PROT_WRITE | MmapProts.PROT_EXEC,
                 MmapFlags.MAP_ANONYMOUS | MmapFlags.MAP_PRIVATE, -1, 0);
+#else
+            throw new PlatformNotSupportedException("Unix opcode allocation is not available in the Windows build.");
 #endif
         }
         else
@@ -279,8 +281,10 @@ internal static class OpCode
             Type sysCall = assembly.GetType("Mono.Unix.Native.Syscall");
             MethodInfo method = sysCall.GetMethod("munmap");
             method?.Invoke(null, [_codeBuffer, _size]);
-#else
+#elif !WINDOWS
             Syscall.munmap(_codeBuffer, _size);
+#else
+            throw new PlatformNotSupportedException("Unix opcode release is not available in the Windows build.");
 #endif
         }
         else

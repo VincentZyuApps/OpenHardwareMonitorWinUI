@@ -1,0 +1,91 @@
+<Page
+    x:Class="OpenHardwareMonitor.App.Pages.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Style="{StaticResource PageRootStyle}" MaxWidth="820">
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource PageTitleStyle}" Text="设置" />
+                <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="外观、采集、服务和应用信息。修改硬件类别后重启应用生效。" />
+            </StackPanel>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="12">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="外观与窗口" />
+                    <ComboBox x:Name="ThemeSelector" Header="主题" SelectionChanged="ThemeSelector_SelectionChanged">
+                        <ComboBoxItem Tag="System" Content="跟随系统" />
+                        <ComboBoxItem Tag="Light" Content="浅色" />
+                        <ComboBoxItem Tag="Dark" Content="深色" />
+                    </ComboBox>
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock VerticalAlignment="Center" Text="刷新间隔（毫秒）" />
+                        <NumberBox Width="140" Minimum="250" Maximum="10000" SmallChange="250" Value="{Binding Settings.RefreshIntervalMilliseconds, Mode=TwoWay}" ValueChanged="SettingsChanged" />
+                    </StackPanel>
+                    <ToggleSwitch Header="关闭窗口时隐藏到通知区域" IsOn="{Binding Settings.CloseToTray, Mode=TwoWay}" Toggled="SettingsChanged" />
+                    <ToggleSwitch Header="启动时最小化" IsOn="{Binding Settings.StartMinimized, Mode=TwoWay}" Toggled="SettingsChanged" />
+                    <Button HorizontalAlignment="Left" Click="RestoreWindowSize_Click">
+                        <StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="Repair" /><TextBlock Text="恢复默认窗口大小" /></StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="9">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="硬件树列" />
+                    <ToggleSwitch Header="当前值" IsOn="{Binding Settings.ShowValueColumn, Mode=TwoWay}" Toggled="DisplayColumnsChanged" />
+                    <ToggleSwitch Header="最小值" IsOn="{Binding Settings.ShowMinimumColumn, Mode=TwoWay}" Toggled="DisplayColumnsChanged" />
+                    <ToggleSwitch Header="最大值" IsOn="{Binding Settings.ShowMaximumColumn, Mode=TwoWay}" Toggled="DisplayColumnsChanged" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="10">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="硬件类别" />
+                    <Grid ColumnSpacing="18" RowSpacing="6">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                        <ToggleSwitch Header="主板" IsOn="{Binding Settings.Hardware.Motherboard, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Column="1" Header="CPU" IsOn="{Binding Settings.Hardware.Cpu, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="1" Header="内存" IsOn="{Binding Settings.Hardware.Memory, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="1" Grid.Column="1" Header="GPU" IsOn="{Binding Settings.Hardware.Gpu, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="2" Header="存储设备" IsOn="{Binding Settings.Hardware.Storage, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="2" Grid.Column="1" Header="网络" IsOn="{Binding Settings.Hardware.Network, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="3" Header="电池" IsOn="{Binding Settings.Hardware.Battery, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="3" Grid.Column="1" Header="风扇控制器" IsOn="{Binding Settings.Hardware.Controller, Mode=TwoWay}" Toggled="SettingsChanged" />
+                        <ToggleSwitch Grid.Row="4" Header="电源供应器" IsOn="{Binding Settings.Hardware.Psu, Mode=TwoWay}" Toggled="SettingsChanged" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="12">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="日志与远程服务" />
+                    <ToggleSwitch Header="记录传感器 CSV 数据" IsOn="{Binding Settings.Logging.Enabled, Mode=TwoWay}" Toggled="SettingsChanged" />
+                    <StackPanel Orientation="Horizontal" Spacing="12"><TextBlock VerticalAlignment="Center" Text="日志间隔（秒）" /><NumberBox Width="130" Minimum="1" Maximum="3600" Value="{Binding Settings.Logging.IntervalSeconds, Mode=TwoWay}" ValueChanged="SettingsChanged" /></StackPanel>
+                    <ToggleSwitch Header="启用远程 Web / API" IsOn="{Binding Settings.WebServer.Enabled, Mode=TwoWay}" Toggled="WebServerChanged" />
+                    <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="140" /></Grid.ColumnDefinitions><TextBox Header="监听地址" Text="{Binding Settings.WebServer.Host, Mode=TwoWay}" TextChanged="WebSettingsChanged" /><NumberBox Grid.Column="1" Header="端口" Minimum="1024" Maximum="65535" Value="{Binding Settings.WebServer.Port, Mode=TwoWay}" ValueChanged="WebSettingsChanged" /></Grid>
+                    <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="{Binding WebServerAddress}" />
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="9">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="紧凑悬浮窗" />
+                    <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="以始终置顶的小窗口显示选中的关键读数。它与按硬件打开的信息窗口相互独立。" />
+                    <Button HorizontalAlignment="Left" Click="ToggleGadget_Click"><StackPanel Orientation="Horizontal" Spacing="7"><SymbolIcon Symbol="OpenPane" /><TextBlock Text="显示或隐藏悬浮窗" /></StackPanel></Button>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SurfaceStyle}" Padding="16">
+                <StackPanel Spacing="7">
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="关于" />
+                    <TextBlock FontWeight="SemiBold" Text="Open Hardware Monitor WinUI" />
+                    <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="独立的 Windows App SDK / WinUI 3 实验性应用。硬件采集复用 OpenHardwareMonitorLib，遵循 MPL-2.0。" />
+                    <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="需要 Windows 10 2004（19041）或更高版本、x64；底层硬件访问通常需要管理员权限。" />
+                    <TextBlock Margin="0,5,0,0" Style="{StaticResource SecondaryTextStyle}" Text="配置位置" />
+                    <TextBlock FontSize="12" Text="{Binding SettingsPath}" IsTextSelectionEnabled="True" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

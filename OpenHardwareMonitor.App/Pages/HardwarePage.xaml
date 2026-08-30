@@ -1,0 +1,119 @@
+<Page
+    x:Class="OpenHardwareMonitor.App.Pages.HardwarePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:converters="using:OpenHardwareMonitor.App.Converters">
+    <Page.Resources>
+        <converters:BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+        <Thickness x:Key="TreeViewItemPresenterMargin">2,0</Thickness>
+        <Thickness x:Key="TreeViewItemPresenterPadding">0</Thickness>
+        <x:Double x:Key="TreeViewItemMinHeight">20</x:Double>
+        <x:Double x:Key="TreeViewItemContentHeight">18</x:Double>
+        <Style x:Key="CompactTreeViewItemStyle" TargetType="TreeViewItem">
+            <Setter Property="MinHeight" Value="20" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style x:Key="CompactAppBarButtonStyle" TargetType="AppBarButton">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="IsCompact" Value="True" />
+        </Style>
+        <Style x:Key="CompactAppBarToggleButtonStyle" TargetType="AppBarToggleButton">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="IsCompact" Value="True" />
+        </Style>
+        <DataTemplate x:Key="HardwareTreeItemTemplate">
+            <Grid MinHeight="20" Padding="4,0" ColumnSpacing="8" AutomationProperties.Name="{Binding Content.Title}" DoubleTapped="TreeRow_DoubleTapped">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="6">
+                    <FontIcon Width="16" FontSize="13" Glyph="{Binding Content.IconGlyph}" Opacity="0.85" />
+                    <TextBlock VerticalAlignment="Center" FontSize="13" Text="{Binding Content.Title}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Width="{Binding Content.ValueColumnWidth}" Padding="0,0,8,0" FontSize="13" Text="{Binding Content.ValueText}" TextAlignment="Right" TextTrimming="CharacterEllipsis" Visibility="{Binding Content.ShowValueColumn, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <TextBlock Width="{Binding Content.MinimumColumnWidth}" Padding="0,0,8,0" FontSize="13" Text="{Binding Content.MinimumText}" TextAlignment="Right" TextTrimming="CharacterEllipsis" Visibility="{Binding Content.ShowMinimumColumn, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <TextBlock Width="{Binding Content.MaximumColumnWidth}" Padding="0,0,8,0" FontSize="13" Text="{Binding Content.MaximumText}" TextAlignment="Right" TextTrimming="CharacterEllipsis" Visibility="{Binding Content.ShowMaximumColumn, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </StackPanel>
+                <Grid.ContextFlyout>
+                    <MenuFlyout Opening="NodeMenuFlyout_Opening">
+                        <MenuFlyoutItem AutomationProperties.AutomationId="hardware-info" Tag="{Binding Content}" Text="硬件信息" Click="HardwareInfo_Click" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem AutomationProperties.AutomationId="parameters" Tag="{Binding Content}" Text="参数..." Click="Parameters_Click" />
+                        <MenuFlyoutItem AutomationProperties.AutomationId="rename" Tag="{Binding Content}" Text="设置显示名称" Click="Rename_Click" />
+                        <MenuFlyoutItem AutomationProperties.AutomationId="hide" Tag="{Binding Content}" Text="隐藏传感器" Click="Hide_Click" />
+                        <MenuFlyoutItem AutomationProperties.AutomationId="chart" Tag="{Binding Content}" Text="在图表中显示" Click="Chart_Click" />
+                        <MenuFlyoutItem AutomationProperties.AutomationId="reset" Tag="{Binding Content}" Text="重置最小/最大值" Click="Reset_Click" />
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="6,4,6,6" RowSpacing="4">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Height="36" ColumnSpacing="6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <CommandBar Height="36" DefaultLabelPosition="Collapsed" Background="Transparent" BorderThickness="0">
+                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="Refresh" Label="刷新" Click="Refresh_Click" ToolTipService.ToolTip="立即刷新" />
+                <AppBarToggleButton Style="{StaticResource CompactAppBarToggleButtonStyle}" Icon="ShowResults" Label="显示隐藏的传感器" IsChecked="{Binding ShowHiddenSensors, Mode=TwoWay}" ToolTipService.ToolTip="显示隐藏的传感器" />
+                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="ViewAll" Label="全部展开" Click="ExpandAll_Click" ToolTipService.ToolTip="全部展开" />
+                <AppBarButton Style="{StaticResource CompactAppBarButtonStyle}" Icon="List" Label="全部折叠" Click="CollapseAll_Click" ToolTipService.ToolTip="全部折叠" />
+            </CommandBar>
+            <TextBox Grid.Column="1" Height="30" MinHeight="30" MaxWidth="360" Padding="10,3" HorizontalAlignment="Stretch" VerticalAlignment="Center" PlaceholderText="搜索硬件或传感器" Text="{Binding SensorFilter, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+        </Grid>
+
+        <Border Grid.Row="1" Background="{ThemeResource AppSurfaceBrush}" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1" CornerRadius="4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="28" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <Grid Padding="36,0,12,0" Background="{ThemeResource AppSurfaceSubtleBrush}" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,0,0,1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Text="硬件 / 传感器" />
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">
+                        <Grid Width="{Binding ValueColumnWidth}" Visibility="{Binding Settings.ShowValueColumn, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid Width="8" HorizontalAlignment="Left" Tag="Value" PointerPressed="ColumnResize_PointerPressed" PointerMoved="ColumnResize_PointerMoved" PointerReleased="ColumnResize_PointerReleased" PointerCanceled="ColumnResize_PointerCanceled" ToolTipService.ToolTip="拖动调整当前值列宽"><Border Width="1" HorizontalAlignment="Center" Background="{ThemeResource AppBorderBrush}" /></Grid>
+                            <TextBlock Margin="8,0,8,0" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Text="当前" TextAlignment="Right" />
+                        </Grid>
+                        <Grid Width="{Binding MinimumColumnWidth}" Visibility="{Binding Settings.ShowMinimumColumn, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid Width="8" HorizontalAlignment="Left" Tag="Minimum" PointerPressed="ColumnResize_PointerPressed" PointerMoved="ColumnResize_PointerMoved" PointerReleased="ColumnResize_PointerReleased" PointerCanceled="ColumnResize_PointerCanceled" ToolTipService.ToolTip="拖动调整最小值列宽"><Border Width="1" HorizontalAlignment="Center" Background="{ThemeResource AppBorderBrush}" /></Grid>
+                            <TextBlock Margin="8,0,8,0" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Text="最小" TextAlignment="Right" />
+                        </Grid>
+                        <Grid Width="{Binding MaximumColumnWidth}" Visibility="{Binding Settings.ShowMaximumColumn, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid Width="8" HorizontalAlignment="Left" Tag="Maximum" PointerPressed="ColumnResize_PointerPressed" PointerMoved="ColumnResize_PointerMoved" PointerReleased="ColumnResize_PointerReleased" PointerCanceled="ColumnResize_PointerCanceled" ToolTipService.ToolTip="拖动调整最大值列宽"><Border Width="1" HorizontalAlignment="Center" Background="{ThemeResource AppBorderBrush}" /></Grid>
+                            <TextBlock Margin="8,0,8,0" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Text="最大" TextAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+                <TreeView
+                    x:Name="HardwareTree"
+                    Grid.Row="1"
+                    ItemContainerStyle="{StaticResource CompactTreeViewItemStyle}"
+                    ItemTemplate="{StaticResource HardwareTreeItemTemplate}"
+                    SelectionMode="Single"
+                    SelectionChanged="HardwareTree_SelectionChanged"
+                    Expanding="HardwareTree_Expanding"
+                    Collapsed="HardwareTree_Collapsed"
+                    ItemInvoked="HardwareTree_ItemInvoked" />
+            </Grid>
+        </Border>
+    </Grid>
+</Page>
