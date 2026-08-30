@@ -56,6 +56,25 @@
             <Frame x:Name="ContentFrame" />
         </NavigationView>
 
+        <InfoBar
+            x:Name="NotificationBar"
+            Grid.Row="1"
+            Margin="0,48,16,0"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Top"
+            AutomationProperties.LiveSetting="Polite"
+            Canvas.ZIndex="20"
+            IsClosable="True"
+            IsOpen="False"
+            MaxWidth="560"
+            MinWidth="320"
+            Opacity="0"
+            RenderTransformOrigin="0.5,0">
+            <InfoBar.RenderTransform>
+                <CompositeTransform x:Name="NotificationTransform" TranslateY="-8" />
+            </InfoBar.RenderTransform>
+        </InfoBar>
+
         <Grid Grid.Row="2" Padding="12,0,6,0" Background="{ThemeResource AppHeaderBrush}" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

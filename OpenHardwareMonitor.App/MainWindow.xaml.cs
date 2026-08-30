@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media.Animation;
 using OpenHardwareMonitor.Core;
 using Windows.Graphics;
 using WinUIEx;
@@ -13,6 +14,8 @@ public sealed partial class MainWindow : WindowEx
 {
     private readonly DispatcherTimer _refreshTimer = new();
     private readonly Dictionary<string, HardwareInfoWindow> _hardwareInfoWindows = new(StringComparer.OrdinalIgnoreCase);
+    private int _notificationVersion;
+    private Storyboard? _notificationStoryboard;
     private bool _exitRequested;
     private bool _initialized;
     private bool _settingsReady;
@@ -128,6 +131,96 @@ public sealed partial class MainWindow : WindowEx
         window.Activate();
     }
 
+    public void ShowNotification(string message, InfoBarSeverity severity)
+    {
+        var version = ++_notificationVersion;
+        StopNotificationAnimation();
+        NotificationBar.Message = message;
+        NotificationBar.Severity = severity;
+        NotificationBar.IsOpen = true;
+        NotificationBar.Opacity = 0;
+        NotificationTransform.TranslateY = -8;
+
+        if (!DispatcherQueue.TryEnqueue(() => StartNotificationEntranceAnimation(version)))
+        {
+            NotificationBar.Opacity = 1;
+            NotificationTransform.TranslateY = 0;
+        }
+        _ = HideNotificationAfterDelayAsync(version);
+    }
+
+    private void StartNotificationEntranceAnimation(int version)
+    {
+        if (version != _notificationVersion || !NotificationBar.IsOpen) return;
+        var storyboard = CreateNotificationStoryboard(1, 0, 180, 220, EasingMode.EaseOut);
+        storyboard.Completed += (_, _) =>
+        {
+            if (ReferenceEquals(_notificationStoryboard, storyboard)) _notificationStoryboard = null;
+        };
+        _notificationStoryboard = storyboard;
+        storyboard.Begin();
+    }
+
+    public void HideNotification()
+    {
+        var version = ++_notificationVersion;
+        if (!NotificationBar.IsOpen) return;
+        StopNotificationAnimation();
+
+        var storyboard = CreateNotificationStoryboard(0, -6, 140, 160, EasingMode.EaseIn);
+        storyboard.Completed += (_, _) =>
+        {
+            if (version == _notificationVersion) NotificationBar.IsOpen = false;
+            if (ReferenceEquals(_notificationStoryboard, storyboard)) _notificationStoryboard = null;
+        };
+        _notificationStoryboard = storyboard;
+        storyboard.Begin();
+    }
+
+    private async Task HideNotificationAfterDelayAsync(int version)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(5.5));
+        if (_notificationVersion == version) HideNotification();
+    }
+
+    private Storyboard CreateNotificationStoryboard(
+        double opacity,
+        double translateY,
+        int opacityDurationMilliseconds,
+        int translationDurationMilliseconds,
+        EasingMode easingMode)
+    {
+        var fade = new DoubleAnimation
+        {
+            To = opacity,
+            Duration = TimeSpan.FromMilliseconds(opacityDurationMilliseconds),
+            EasingFunction = new CubicEase { EasingMode = easingMode }
+        };
+        Storyboard.SetTarget(fade, NotificationBar);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        var slide = new DoubleAnimation
+        {
+            To = translateY,
+            Duration = TimeSpan.FromMilliseconds(translationDurationMilliseconds),
+            EasingFunction = new CubicEase { EasingMode = easingMode },
+            EnableDependentAnimation = true
+        };
+        Storyboard.SetTarget(slide, NotificationTransform);
+        Storyboard.SetTargetProperty(slide, "TranslateY");
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(fade);
+        storyboard.Children.Add(slide);
+        return storyboard;
+    }
+
+    private void StopNotificationAnimation()
+    {
+        _notificationStoryboard?.Stop();
+        _notificationStoryboard = null;
+    }
+
     public async Task RestoreDefaultWindowSizeAsync()
     {
         ViewModel.Settings.Window.Width = 980;
@@ -226,6 +319,8 @@ public sealed partial class MainWindow : WindowEx
     private async void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         _refreshTimer.Stop();
+        _notificationVersion++;
+        StopNotificationAnimation();
         foreach (var window in _hardwareInfoWindows.Values.ToArray()) window.Close();
         _hardwareInfoWindows.Clear();
         CloseGadget();

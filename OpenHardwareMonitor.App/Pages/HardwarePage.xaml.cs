@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
 using OpenHardwareMonitor.Core;
@@ -18,8 +19,13 @@ public sealed partial class HardwarePage : Page
     private uint _resizePointerId;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    private readonly DispatcherTimer _searchDebounceTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
 
-    public HardwarePage() => InitializeComponent();
+    public HardwarePage()
+    {
+        InitializeComponent();
+        _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
+    }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
@@ -32,6 +38,8 @@ public sealed partial class HardwarePage : Page
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
+        _searchDebounceTimer.Stop();
+        MainWindow.Instance?.HideNotification();
         if (_boundRootNodes is not null) _boundRootNodes.CollectionChanged -= HardwareTreeNodes_CollectionChanged;
         _boundRootNodes = null;
         base.OnNavigatedFrom(e);
@@ -59,18 +67,90 @@ public sealed partial class HardwarePage : Page
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is not null) await ViewModel.RefreshAsync();
+        if (ViewModel is null) return;
+        await ViewModel.RefreshAsync();
+        if (ViewModel.StatusText.StartsWith("读取硬件数据失败", StringComparison.Ordinal))
+            ShowNotification(ViewModel.StatusText, InfoBarSeverity.Error);
+        else
+            ShowNotification($"已刷新 {ViewModel.Snapshot.Sensors.Count} 个传感器", InfoBarSeverity.Success);
+    }
+
+    private void ShowHiddenSensors_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ToggleButton toggle) return;
+        ShowNotification(
+            toggle.IsChecked == true ? "已显示隐藏的传感器" : "已隐藏标记为隐藏的传感器",
+            InfoBarSeverity.Informational);
     }
 
     private async void ExpandAll_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is not null) await ViewModel.ExpandAllAsync(true);
+        if (ViewModel is null) return;
+        await ViewModel.ExpandAllAsync(true);
+        ShowNotification("已展开全部硬件项目", InfoBarSeverity.Informational);
     }
 
     private async void CollapseAll_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is not null) await ViewModel.ExpandAllAsync(false);
+        if (ViewModel is null) return;
+        await ViewModel.ExpandAllAsync(false);
+        ShowNotification("已折叠全部硬件项目", InfoBarSeverity.Informational);
     }
+
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        _searchDebounceTimer.Stop();
+        if (sender is not TextBox searchBox || string.IsNullOrWhiteSpace(searchBox.Text))
+        {
+            MainWindow.Instance?.HideNotification();
+            return;
+        }
+        _searchDebounceTimer.Start();
+    }
+
+    private void SearchDebounceTimer_Tick(object? sender, object e)
+    {
+        _searchDebounceTimer.Stop();
+        if (ViewModel is null) return;
+        var query = ViewModel.SensorFilter.Trim();
+        if (query.Length == 0) return;
+
+        var (sensorCount, hardwareCount) = CountFilteredItems(ViewModel.HardwareTreeNodes);
+        if (sensorCount > 0)
+        {
+            var hardwareSuffix = hardwareCount > 0 ? $"，来自 {hardwareCount} 个硬件" : string.Empty;
+            ShowNotification($"“{query}”筛选出 {sensorCount} 个传感器{hardwareSuffix}", InfoBarSeverity.Success);
+        }
+        else if (hardwareCount > 0)
+        {
+            ShowNotification($"“{query}”筛选出 {hardwareCount} 个硬件", InfoBarSeverity.Success);
+        }
+        else
+        {
+            ShowNotification($"未找到与“{query}”匹配的硬件或传感器", InfoBarSeverity.Warning);
+        }
+    }
+
+    private static (int SensorCount, int HardwareCount) CountFilteredItems(IEnumerable<TreeViewNode> roots)
+    {
+        var sensorCount = 0;
+        var hardwareCount = 0;
+        foreach (var root in roots) CountFilteredItems(root, ref sensorCount, ref hardwareCount);
+        return (sensorCount, hardwareCount);
+    }
+
+    private static void CountFilteredItems(TreeViewNode node, ref int sensorCount, ref int hardwareCount)
+    {
+        if (node.Content is HardwareTreeItemViewModel item)
+        {
+            if (item.IsSensor) sensorCount++;
+            else if (item.Kind == MonitorTreeNodeKind.Hardware) hardwareCount++;
+        }
+        foreach (var child in node.Children) CountFilteredItems(child, ref sensorCount, ref hardwareCount);
+    }
+
+    private void ShowNotification(string message, InfoBarSeverity severity)
+        => MainWindow.Instance?.ShowNotification(message, severity);
 
     private void HardwareTree_SelectionChanged(TreeView sender, TreeViewSelectionChangedEventArgs args) =>
         ViewModel?.SelectTreeItem(sender.SelectedNode ?? sender.SelectedItem);
