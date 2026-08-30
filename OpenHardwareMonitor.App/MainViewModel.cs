@@ -323,9 +323,39 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         SensorRows.Clear();
         foreach (var row in rows) SensorRows.Add(row);
 
-        ControlRows.Clear();
-        foreach (var row in rows.Where(row => row.IsControllable)) ControlRows.Add(new ControlRowViewModel(row));
+        ReconcileControlRows(rows.Where(row => row.IsControllable).ToArray());
         RebuildDashboard(rows);
+    }
+
+    private void ReconcileControlRows(IReadOnlyList<SensorRowViewModel> rows)
+    {
+        var desiredIds = rows.Select(row => row.SensorId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (var index = ControlRows.Count - 1; index >= 0; index--)
+        {
+            if (!desiredIds.Contains(ControlRows[index].SensorId)) ControlRows.RemoveAt(index);
+        }
+
+        for (var desiredIndex = 0; desiredIndex < rows.Count; desiredIndex++)
+        {
+            var source = rows[desiredIndex];
+            var currentIndex = -1;
+            for (var index = 0; index < ControlRows.Count; index++)
+            {
+                if (!string.Equals(ControlRows[index].SensorId, source.SensorId, StringComparison.OrdinalIgnoreCase)) continue;
+                currentIndex = index;
+                break;
+            }
+
+            if (currentIndex < 0)
+            {
+                ControlRows.Insert(desiredIndex, new ControlRowViewModel(source));
+                continue;
+            }
+
+            var target = ControlRows[currentIndex];
+            target.Update(source);
+            if (currentIndex != desiredIndex) ControlRows.Move(currentIndex, desiredIndex);
+        }
     }
 
     private void RebuildHardwareTree(HardwareSnapshot snapshot)
@@ -746,26 +776,38 @@ public sealed class DashboardMetricViewModel
     public string? SensorId { get; }
 }
 
-public sealed class ControlRowViewModel
+public sealed class ControlRowViewModel : ObservableObject
 {
+    private string _name = string.Empty;
+    private string _hardwareName = string.Empty;
+    private string _currentValue = string.Empty;
+    private double _minimumValue;
+    private double _maximumValue;
+    private double _pendingValue;
+
     public ControlRowViewModel(SensorRowViewModel row)
     {
         SensorId = row.SensorId;
+        Update(row);
+        PendingValue = (MinimumValue + MaximumValue) / 2;
+    }
+
+    public string SensorId { get; }
+    public string Name { get => _name; private set => SetProperty(ref _name, value); }
+    public string HardwareName { get => _hardwareName; private set => SetProperty(ref _hardwareName, value); }
+    public string CurrentValue { get => _currentValue; private set => SetProperty(ref _currentValue, value); }
+    public double MinimumValue { get => _minimumValue; private set => SetProperty(ref _minimumValue, value); }
+    public double MaximumValue { get => _maximumValue; private set => SetProperty(ref _maximumValue, value); }
+    public double PendingValue { get => _pendingValue; set => SetProperty(ref _pendingValue, value); }
+
+    public void Update(SensorRowViewModel row)
+    {
         Name = row.Name;
         HardwareName = row.HardwareName;
         CurrentValue = row.ValueText;
         MinimumValue = row.MinimumControlValue;
         MaximumValue = row.MaximumControlValue;
-        PendingValue = (MinimumValue + MaximumValue) / 2;
     }
-
-    public string SensorId { get; }
-    public string Name { get; }
-    public string HardwareName { get; }
-    public string CurrentValue { get; }
-    public double MinimumValue { get; }
-    public double MaximumValue { get; }
-    public double PendingValue { get; set; }
 }
 
 public sealed class ChartSeriesViewModel
