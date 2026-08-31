@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml.Controls;
 using OpenHardwareMonitor.Core;
@@ -12,6 +13,15 @@ public enum MonitorTreeNodeKind
     Sensor
 }
 
+public enum HardwareToolbarOperation
+{
+    None,
+    Refresh,
+    ShowHiddenSensors,
+    ExpandAll,
+    CollapseAll
+}
+
 public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly SettingsStore _settingsStore;
@@ -21,8 +31,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, TreeViewNode> _treeNodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HardwareTreeItemViewModel> _treeItems = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _programmaticExpansionChanges = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _treeMutationGate = new(1, 1);
+    private readonly object _refreshSync = new();
+    private Task<bool> _activeRefreshTask = Task.FromResult(true);
     private bool _initialized;
-    private int _refreshInProgress;
+    private int _hardwareToolbarOperationActive;
 
     public MainViewModel(SettingsStore settingsStore, HardwareMonitorService hardware, CsvLoggingService logger, RemoteWebServer webServer)
     {
@@ -52,21 +65,17 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private bool _showHiddenSensors;
     [ObservableProperty] private HardwareTreeItemViewModel? _selectedTreeItem;
     [ObservableProperty] private HardwareTreeItemViewModel? _selectedHardware;
+    [ObservableProperty] private HardwareToolbarOperation _activeHardwareToolbarOperation;
+
+    public bool IsHardwareToolbarBusy => ActiveHardwareToolbarOperation != HardwareToolbarOperation.None;
 
     public event EventHandler? ThemeChanged;
     public event EventHandler? SettingsLoaded;
 
-    partial void OnSensorFilterChanged(string value) => RebuildHardwareTree(Snapshot);
+    partial void OnShowHiddenSensorsChanged(bool value) => Settings.ShowHiddenSensors = value;
 
-    partial void OnShowHiddenSensorsChanged(bool value)
-    {
-        Settings.ShowHiddenSensors = value;
-        if (_initialized)
-        {
-            RebuildHardwareTree(Snapshot);
-            _ = SaveSettingsAsync();
-        }
-    }
+    partial void OnActiveHardwareToolbarOperationChanged(HardwareToolbarOperation value) =>
+        OnPropertyChanged(nameof(IsHardwareToolbarBusy));
 
     partial void OnSelectedTreeItemChanged(HardwareTreeItemViewModel? value)
     {
@@ -97,27 +106,58 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         ThemeChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public async Task RefreshAsync()
+    public Task<bool> RefreshAsync()
     {
-        if (!_initialized || Interlocked.Exchange(ref _refreshInProgress, 1) != 0) return;
+        if (!_initialized) return Task.FromResult(false);
+        lock (_refreshSync)
+        {
+            if (!_activeRefreshTask.IsCompleted) return _activeRefreshTask;
+            _activeRefreshTask = RefreshCoreAsync();
+            return _activeRefreshTask;
+        }
+    }
+
+    private async Task<bool> RefreshCoreAsync()
+    {
         try
         {
             var snapshot = await _hardware.RefreshAsync();
             await _logger.LogAsync(snapshot, Settings.Logging);
-            ProjectSnapshot(snapshot);
+            await _treeMutationGate.WaitAsync();
+            try
+            {
+                await ProjectSnapshotAsync(snapshot);
+            }
+            finally
+            {
+                _treeMutationGate.Release();
+            }
             StatusText = snapshot.Timestamp == DateTimeOffset.MinValue
                 ? "等待传感器数据"
                 : $"{snapshot.Sensors.Count} 个传感器 | 上次更新 {snapshot.Timestamp:HH:mm:ss}";
+            return true;
         }
         catch (Exception exception)
         {
             AppLog.Write(exception);
             StatusText = $"读取硬件数据失败: {exception.Message}";
+            return false;
         }
-        finally
-        {
-            Volatile.Write(ref _refreshInProgress, 0);
-        }
+    }
+
+    public bool TryBeginHardwareToolbarOperation(HardwareToolbarOperation operation)
+    {
+        if (operation == HardwareToolbarOperation.None) return false;
+        if (Interlocked.CompareExchange(ref _hardwareToolbarOperationActive, 1, 0) != 0) return false;
+        ActiveHardwareToolbarOperation = operation;
+        return true;
+    }
+
+    public void EndHardwareToolbarOperation(HardwareToolbarOperation operation)
+    {
+        if (ActiveHardwareToolbarOperation != operation) return;
+        ActiveHardwareToolbarOperation = HardwareToolbarOperation.None;
+        Volatile.Write(ref _hardwareToolbarOperationActive, 0);
     }
 
     public async Task ResetMinMaxAsync()
@@ -202,17 +242,33 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public async Task SetSensorHiddenAsync(string sensorId, bool hidden)
     {
-        GetSensorPresentation(sensorId).IsHidden = hidden;
-        await SaveSettingsAsync();
-        RebuildHardwareTree(Snapshot);
-        ProjectFlatRows(Snapshot);
+        await _treeMutationGate.WaitAsync();
+        try
+        {
+            GetSensorPresentation(sensorId).IsHidden = hidden;
+            await SaveSettingsAsync();
+            await RebuildHardwareTreeAsync(Snapshot, new UiWorkBudget());
+            ProjectFlatRows(Snapshot);
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
     }
 
     public async Task SetSensorDisplayNameAsync(string sensorId, string? displayName)
     {
-        GetSensorPresentation(sensorId).DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
-        await SaveSettingsAsync();
-        ProjectSnapshot(Snapshot);
+        await _treeMutationGate.WaitAsync();
+        try
+        {
+            GetSensorPresentation(sensorId).DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+            await SaveSettingsAsync();
+            await ProjectSnapshotAsync(Snapshot);
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
     }
 
     public async Task SetSensorTrayVisibleAsync(string sensorId, bool visible)
@@ -246,6 +302,11 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         if (node.Content is not HardwareTreeItemViewModel item) return;
         node.IsExpanded = expanded;
         if (_programmaticExpansionChanges.Remove(item.Id, out var expected) && expected == expanded) return;
+        if (IsHardwareToolbarBusy)
+        {
+            SetExpandedProgrammatically(node, item.Id, !expanded);
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(SensorFilter)) return;
         Settings.ExpandedNodes[item.Id] = expanded;
         await SaveSettingsAsync();
@@ -253,8 +314,47 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public async Task ExpandAllAsync(bool expanded)
     {
-        foreach (var root in HardwareTreeNodes) SetExpandedRecursive(root, expanded);
-        await SaveSettingsAsync();
+        await _treeMutationGate.WaitAsync();
+        try
+        {
+            var budget = new UiWorkBudget();
+            foreach (var root in HardwareTreeNodes)
+                await SetExpandedRecursiveAsync(root, expanded, budget);
+            await SaveSettingsAsync();
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
+    }
+
+    public async Task SetShowHiddenSensorsAsync(bool value)
+    {
+        await _treeMutationGate.WaitAsync();
+        try
+        {
+            ShowHiddenSensors = value;
+            await RebuildHardwareTreeAsync(Snapshot, new UiWorkBudget());
+            await SaveSettingsAsync();
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
+    }
+
+    public async Task SetSensorFilterAsync(string value)
+    {
+        await _treeMutationGate.WaitAsync();
+        try
+        {
+            SensorFilter = value;
+            await RebuildHardwareTreeAsync(Snapshot, new UiWorkBudget());
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
     }
 
     public void SelectTreeItem(object? selectedItem)
@@ -306,13 +406,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(MaximumColumnWidth));
     }
 
-    private void ProjectSnapshot(HardwareSnapshot snapshot)
+    private async Task ProjectSnapshotAsync(HardwareSnapshot snapshot)
     {
         ProjectFlatRows(snapshot);
         EnsureDefaultChartSelections(snapshot);
         RebuildChartCandidates(snapshot);
         RebuildCharts(snapshot);
-        RebuildHardwareTree(snapshot);
+        await RebuildHardwareTreeAsync(snapshot, new UiWorkBudget());
     }
 
     private void ProjectFlatRows(HardwareSnapshot snapshot)
@@ -341,7 +441,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             source => new ControlRowViewModel(source),
             (item, source) => item.Update(source));
 
-    private void RebuildHardwareTree(HardwareSnapshot snapshot)
+    private async Task RebuildHardwareTreeAsync(HardwareSnapshot snapshot, UiWorkBudget budget)
     {
         if (snapshot.Hardware.Count == 0)
         {
@@ -349,17 +449,17 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             return;
         }
 
-        var roots = snapshot.Hardware.Select(BuildHardwareNode).Where(node => node is not null).Cast<TreeViewNode>().ToArray();
-        var ids = roots.Select(GetNodeId).ToArray();
-        var existingIds = HardwareTreeNodes.Select(GetNodeId).ToArray();
-        if (!ids.SequenceEqual(existingIds, StringComparer.OrdinalIgnoreCase))
+        var roots = new List<TreeViewNode>();
+        foreach (var hardware in snapshot.Hardware)
         {
-            HardwareTreeNodes.Clear();
-            foreach (var root in roots) HardwareTreeNodes.Add(root);
+            var root = await BuildHardwareNodeAsync(hardware, budget);
+            if (root is not null) roots.Add(root);
+            await budget.YieldIfNeededAsync();
         }
+        await ReconcileRootNodesAsync(roots, budget);
     }
 
-    private TreeViewNode? BuildHardwareNode(HardwareNodeSnapshot snapshot)
+    private async Task<TreeViewNode?> BuildHardwareNodeAsync(HardwareNodeSnapshot snapshot, UiWorkBudget budget)
     {
         var hardwareMatches = Matches(snapshot.Name) || Matches(snapshot.Type);
         var desiredChildren = new List<TreeViewNode>();
@@ -372,12 +472,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
                 .Where(sensor => typeMatches || Matches(sensor.DisplayName) || Matches(sensor.Name) || Matches(sensor.Unit))
                 .ToArray();
             if (sensors.Length == 0) continue;
-            desiredChildren.Add(BuildTypeNode(snapshot, group.Key, typeTitle, sensors));
+            desiredChildren.Add(await BuildTypeNodeAsync(snapshot, group.Key, typeTitle, sensors, budget));
         }
 
         foreach (var child in snapshot.Children)
         {
-            var childNode = BuildHardwareNode(child);
+            var childNode = await BuildHardwareNodeAsync(child, budget);
             if (childNode is not null) desiredChildren.Add(childNode);
         }
 
@@ -385,26 +485,58 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var item = GetTreeItem(snapshot.Id);
         item.UpdateHardware(snapshot, BuildHardwareSummary(snapshot));
         var node = GetTreeNode(item, defaultExpanded: false);
-        ReconcileChildren(node, desiredChildren);
+        await ReconcileChildrenAsync(node, desiredChildren, budget);
         ApplyFilterExpansion(node, desiredChildren.Count > 0);
+        await budget.YieldIfNeededAsync();
         return node;
     }
 
-    private TreeViewNode BuildTypeNode(HardwareNodeSnapshot hardware, string sensorType, string title, IReadOnlyList<SensorReading> sensors)
+    private async Task<TreeViewNode> BuildTypeNodeAsync(
+        HardwareNodeSnapshot hardware,
+        string sensorType,
+        string title,
+        IReadOnlyList<SensorReading> sensors,
+        UiWorkBudget budget)
     {
         var id = $"{hardware.Id}/type/{sensorType}";
         var item = GetTreeItem(id);
         item.UpdateType(id, hardware.Id, title, sensors.Count);
         var node = GetTreeNode(item, defaultExpanded: false);
-        var desiredChildren = sensors.Select(sensor =>
+        var desiredChildren = new List<TreeViewNode>(sensors.Count);
+        foreach (var sensor in sensors)
         {
             var sensorItem = GetTreeItem(sensor.Id);
             sensorItem.UpdateSensor(sensor, GetSensorPresentation(sensor.Id));
-            return GetTreeNode(sensorItem, defaultExpanded: false);
-        }).ToArray();
-        ReconcileChildren(node, desiredChildren);
-        ApplyFilterExpansion(node, desiredChildren.Length > 0);
+            desiredChildren.Add(GetTreeNode(sensorItem, defaultExpanded: false));
+            await budget.YieldIfNeededAsync();
+        }
+        await ReconcileChildrenAsync(node, desiredChildren, budget);
+        ApplyFilterExpansion(node, desiredChildren.Count > 0);
         return node;
+    }
+
+    private async Task ReconcileRootNodesAsync(IReadOnlyList<TreeViewNode> desired, UiWorkBudget budget)
+    {
+        var currentIds = HardwareTreeNodes.Select(GetNodeId).ToArray();
+        var desiredIds = desired.Select(GetNodeId).ToArray();
+        if (currentIds.SequenceEqual(desiredIds, StringComparer.OrdinalIgnoreCase)) return;
+
+        var desiredNodes = desired.ToHashSet(ReferenceEqualityComparer.Instance);
+        for (var index = HardwareTreeNodes.Count - 1; index >= 0; index--)
+        {
+            if (desiredNodes.Contains(HardwareTreeNodes[index])) continue;
+            HardwareTreeNodes.RemoveAt(index);
+            await budget.YieldIfNeededAsync();
+        }
+
+        for (var index = 0; index < desired.Count; index++)
+        {
+            if (index < HardwareTreeNodes.Count && ReferenceEquals(HardwareTreeNodes[index], desired[index])) continue;
+            var currentIndex = HardwareTreeNodes.IndexOf(desired[index]);
+            if (currentIndex >= 0) HardwareTreeNodes.Move(currentIndex, index);
+            else HardwareTreeNodes.Insert(index, desired[index]);
+            await budget.YieldIfNeededAsync();
+        }
     }
 
     private TreeViewNode GetTreeNode(HardwareTreeItemViewModel item, bool defaultExpanded)
@@ -412,7 +544,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         item.UpdateColumnVisibility(Settings);
         if (_treeNodes.TryGetValue(item.Id, out var existing))
         {
-            existing.Content = item;
+            if (!ReferenceEquals(existing.Content, item)) existing.Content = item;
             item.Node = existing;
             if (string.IsNullOrWhiteSpace(SensorFilter))
                 SetExpandedProgrammatically(existing, item.Id, Settings.ExpandedNodes.TryGetValue(item.Id, out var existingExpanded) ? existingExpanded : defaultExpanded);
@@ -444,13 +576,28 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         node.IsExpanded = expanded;
     }
 
-    private static void ReconcileChildren(TreeViewNode parent, IReadOnlyList<TreeViewNode> desired)
+    private static async Task ReconcileChildrenAsync(TreeViewNode parent, IReadOnlyList<TreeViewNode> desired, UiWorkBudget budget)
     {
         var currentIds = parent.Children.Select(GetNodeId).ToArray();
         var desiredIds = desired.Select(GetNodeId).ToArray();
         if (currentIds.SequenceEqual(desiredIds, StringComparer.OrdinalIgnoreCase)) return;
-        parent.Children.Clear();
-        foreach (var child in desired) parent.Children.Add(child);
+
+        var desiredNodes = desired.ToHashSet(ReferenceEqualityComparer.Instance);
+        for (var index = parent.Children.Count - 1; index >= 0; index--)
+        {
+            if (desiredNodes.Contains(parent.Children[index])) continue;
+            parent.Children.RemoveAt(index);
+            await budget.YieldIfNeededAsync();
+        }
+
+        for (var index = 0; index < desired.Count; index++)
+        {
+            if (index < parent.Children.Count && ReferenceEquals(parent.Children[index], desired[index])) continue;
+            var currentIndex = parent.Children.IndexOf(desired[index]);
+            if (currentIndex >= 0) parent.Children.RemoveAt(currentIndex);
+            parent.Children.Insert(index, desired[index]);
+            await budget.YieldIfNeededAsync();
+        }
     }
 
     private HardwareTreeItemViewModel GetTreeItem(string id)
@@ -568,14 +715,36 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private static string GetNodeId(TreeViewNode node) => (node.Content as HardwareTreeItemViewModel)?.Id ?? string.Empty;
 
-    private void SetExpandedRecursive(TreeViewNode node, bool expanded)
+    private async Task SetExpandedRecursiveAsync(TreeViewNode node, bool expanded, UiWorkBudget budget)
     {
-        if (node.Content is HardwareTreeItemViewModel item)
+        if (node.Children.Count == 0) return;
+        if (expanded && node.Content is HardwareTreeItemViewModel expandingItem)
         {
-            SetExpandedProgrammatically(node, item.Id, expanded);
-            Settings.ExpandedNodes[item.Id] = expanded;
+            SetExpandedProgrammatically(node, expandingItem.Id, true);
+            Settings.ExpandedNodes[expandingItem.Id] = true;
+            await budget.YieldIfNeededAsync(force: true);
         }
-        foreach (var child in node.Children) SetExpandedRecursive(child, expanded);
+        foreach (var child in node.Children)
+            await SetExpandedRecursiveAsync(child, expanded, budget);
+        if (!expanded && node.Content is HardwareTreeItemViewModel collapsingItem)
+        {
+            SetExpandedProgrammatically(node, collapsingItem.Id, false);
+            Settings.ExpandedNodes[collapsingItem.Id] = false;
+            await budget.YieldIfNeededAsync(force: true);
+        }
+    }
+
+    private sealed class UiWorkBudget
+    {
+        private static readonly TimeSpan MaximumSlice = TimeSpan.FromMilliseconds(8);
+        private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+
+        public async ValueTask YieldIfNeededAsync(bool force = false)
+        {
+            if (!force && _stopwatch.Elapsed < MaximumSlice) return;
+            await Task.Delay(1);
+            _stopwatch.Restart();
+        }
     }
 
     public static string GetSensorTypeName(string type) => type switch
@@ -660,6 +829,9 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
 
     public void UpdateHardware(HardwareNodeSnapshot snapshot, string summary)
     {
+        var kindChanged = Kind != MonitorTreeNodeKind.Hardware;
+        var hiddenChanged = _isHidden;
+        var controllableChanged = IsControllable;
         Kind = MonitorTreeNodeKind.Hardware;
         HardwareId = snapshot.Id;
         _sensor = null;
@@ -672,16 +844,21 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
         MaximumText = string.Empty;
         Report = snapshot.Report;
         ReplaceProperties(snapshot.Properties);
-        OnPropertyChanged(nameof(Sensor));
-        OnPropertyChanged(nameof(IsHidden));
-        OnPropertyChanged(nameof(IsControllable));
-        OnPropertyChanged(nameof(IsSensor));
-        OnPropertyChanged(nameof(KindLabel));
-        OnPropertyChanged(nameof(IconGlyph));
+        if (hiddenChanged) OnPropertyChanged(nameof(IsHidden));
+        if (controllableChanged) OnPropertyChanged(nameof(IsControllable));
+        if (kindChanged)
+        {
+            OnPropertyChanged(nameof(IsSensor));
+            OnPropertyChanged(nameof(KindLabel));
+            OnPropertyChanged(nameof(IconGlyph));
+        }
     }
 
     public void UpdateType(string id, string hardwareId, string title, int sensorCount)
     {
+        var kindChanged = Kind != MonitorTreeNodeKind.SensorType;
+        var hiddenChanged = _isHidden;
+        var controllableChanged = IsControllable;
         Kind = MonitorTreeNodeKind.SensorType;
         HardwareId = hardwareId;
         SensorType = title;
@@ -695,21 +872,28 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
         MaximumText = string.Empty;
         Report = string.Empty;
         Properties.Clear();
-        OnPropertyChanged(nameof(Sensor));
-        OnPropertyChanged(nameof(IsHidden));
-        OnPropertyChanged(nameof(IsControllable));
-        OnPropertyChanged(nameof(IsSensor));
-        OnPropertyChanged(nameof(KindLabel));
-        OnPropertyChanged(nameof(IconGlyph));
+        if (hiddenChanged) OnPropertyChanged(nameof(IsHidden));
+        if (controllableChanged) OnPropertyChanged(nameof(IsControllable));
+        if (kindChanged)
+        {
+            OnPropertyChanged(nameof(IsSensor));
+            OnPropertyChanged(nameof(KindLabel));
+            OnPropertyChanged(nameof(IconGlyph));
+        }
     }
 
     public void UpdateSensor(SensorReading sensor, SensorPresentationSettings presentation)
     {
+        var kindChanged = Kind != MonitorTreeNodeKind.Sensor;
+        var hidden = sensor.IsDefaultHidden || presentation.IsHidden;
+        var hiddenChanged = _isHidden != hidden;
+        var controllableChanged = IsControllable != sensor.IsControllable;
+        var chartedChanged = IsCharted != presentation.ShowInChart;
         Kind = MonitorTreeNodeKind.Sensor;
         HardwareId = sensor.HardwareId;
         SensorType = sensor.Type;
         _sensor = sensor;
-        _isHidden = sensor.IsDefaultHidden || presentation.IsHidden;
+        _isHidden = hidden;
         Title = string.IsNullOrWhiteSpace(presentation.DisplayName) ? sensor.DisplayName : presentation.DisplayName!;
         Subtitle = sensor.HardwareName;
         SummaryText = string.Empty;
@@ -719,13 +903,15 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
         Report = string.Empty;
         Properties.Clear();
         IsCharted = presentation.ShowInChart;
-        OnPropertyChanged(nameof(Sensor));
-        OnPropertyChanged(nameof(IsHidden));
-        OnPropertyChanged(nameof(IsControllable));
-        OnPropertyChanged(nameof(IsCharted));
-        OnPropertyChanged(nameof(IsSensor));
-        OnPropertyChanged(nameof(KindLabel));
-        OnPropertyChanged(nameof(IconGlyph));
+        if (hiddenChanged) OnPropertyChanged(nameof(IsHidden));
+        if (controllableChanged) OnPropertyChanged(nameof(IsControllable));
+        if (chartedChanged) OnPropertyChanged(nameof(IsCharted));
+        if (kindChanged)
+        {
+            OnPropertyChanged(nameof(IsSensor));
+            OnPropertyChanged(nameof(KindLabel));
+            OnPropertyChanged(nameof(IconGlyph));
+        }
     }
 
     public void UpdateColumnVisibility(AppSettings settings)
@@ -745,6 +931,19 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
 
     private void ReplaceProperties(IReadOnlyDictionary<string, string> properties)
     {
+        if (Properties.Count == properties.Count)
+        {
+            var unchanged = true;
+            var index = 0;
+            foreach (var property in properties)
+            {
+                var current = Properties[index++];
+                if (current.Key == property.Key && current.Value == property.Value) continue;
+                unchanged = false;
+                break;
+            }
+            if (unchanged) return;
+        }
         Properties.Clear();
         foreach (var property in properties)
             Properties.Add(new HardwarePropertyViewModel(property.Key, property.Value));

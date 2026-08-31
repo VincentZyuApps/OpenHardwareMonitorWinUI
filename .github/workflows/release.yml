@@ -117,9 +117,14 @@ jobs:
       - name: Create release notes
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          ASSET_NAME: ${{ needs.prepare.outputs.asset_name }}
         run: |
-          printf '# Open Hardware Monitor %s\n\nWindows 10 2004+ x64 self-contained WinUI build.\n\n## Changes\n' "$VERSION" > release-notes.md
-          git log -20 --pretty=format:'- [%h](https://github.com/'"$GITHUB_REPOSITORY"'/commit/%H) %s' >> release-notes.md
+          python scripts/ci/render_release_notes.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
+            --sha "$GITHUB_SHA" \
+            --asset-name "$ASSET_NAME" \
+            --output release-notes.md
       - name: Create tag and release
         env:
           GH_TOKEN: ${{ github.token }}

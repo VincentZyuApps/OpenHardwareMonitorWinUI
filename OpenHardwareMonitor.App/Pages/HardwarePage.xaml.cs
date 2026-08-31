@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
@@ -19,6 +20,7 @@ public sealed partial class HardwarePage : Page
     private uint _resizePointerId;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    private int _searchVersion;
     private readonly DispatcherTimer _searchDebounceTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
 
     public HardwarePage()
@@ -33,13 +35,17 @@ public sealed partial class HardwarePage : Page
         if (ViewModel is null) return;
         _boundRootNodes = ViewModel.HardwareTreeNodes;
         _boundRootNodes.CollectionChanged += HardwareTreeNodes_CollectionChanged;
+        ViewModel.PropertyChanged += ViewModel_PropertyChanged;
         SyncRootNodes();
+        UpdateToolbarOperationState();
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         _searchDebounceTimer.Stop();
-        MainWindow.Instance?.HideNotification();
+        _searchVersion++;
+        MainWindow.Instance?.HideTransientNotification();
+        if (ViewModel is not null) ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
         if (_boundRootNodes is not null) _boundRootNodes.CollectionChanged -= HardwareTreeNodes_CollectionChanged;
         _boundRootNodes = null;
         base.OnNavigatedFrom(e);
@@ -67,55 +73,162 @@ public sealed partial class HardwarePage : Page
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is null) return;
-        await ViewModel.RefreshAsync();
-        if (ViewModel.StatusText.StartsWith("读取硬件数据失败", StringComparison.Ordinal))
-            ShowNotification(ViewModel.StatusText, InfoBarSeverity.Error);
-        else
-            ShowNotification($"已刷新 {ViewModel.Snapshot.Sensors.Count} 个传感器", InfoBarSeverity.Success);
+        if (ViewModel is not { } viewModel) return;
+        await RunToolbarOperationAsync(
+            HardwareToolbarOperation.Refresh,
+            "正在刷新硬件数据...",
+            () => viewModel.RefreshAsync(),
+            () => $"已刷新 {viewModel.Snapshot.Sensors.Count} 个传感器");
     }
 
-    private void ShowHiddenSensors_Click(object sender, RoutedEventArgs e)
+    private async void ShowHiddenSensors_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not ToggleButton toggle) return;
-        ShowNotification(
-            toggle.IsChecked == true ? "已显示隐藏的传感器" : "已隐藏标记为隐藏的传感器",
-            InfoBarSeverity.Informational);
+        if (ViewModel is not { } viewModel || sender is not ToggleButton toggle) return;
+        var showHidden = toggle.IsChecked == true;
+        await RunToolbarOperationAsync(
+            HardwareToolbarOperation.ShowHiddenSensors,
+            showHidden ? "正在显示隐藏的传感器..." : "正在隐藏标记为隐藏的传感器...",
+            async () =>
+            {
+                await viewModel.SetShowHiddenSensorsAsync(showHidden);
+                return true;
+            },
+            () => showHidden ? "已显示隐藏的传感器" : "已隐藏标记为隐藏的传感器");
     }
 
     private async void ExpandAll_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is null) return;
-        await ViewModel.ExpandAllAsync(true);
-        ShowNotification("已展开全部硬件项目", InfoBarSeverity.Informational);
+        if (ViewModel is not { } viewModel) return;
+        await RunToolbarOperationAsync(
+            HardwareToolbarOperation.ExpandAll,
+            "正在展开全部硬件项目...",
+            async () =>
+            {
+                await viewModel.ExpandAllAsync(true);
+                return true;
+            },
+            () => "已展开全部硬件项目");
     }
 
     private async void CollapseAll_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is null) return;
-        await ViewModel.ExpandAllAsync(false);
-        ShowNotification("已折叠全部硬件项目", InfoBarSeverity.Informational);
+        if (ViewModel is not { } viewModel) return;
+        await RunToolbarOperationAsync(
+            HardwareToolbarOperation.CollapseAll,
+            "正在折叠全部硬件项目...",
+            async () =>
+            {
+                await viewModel.ExpandAllAsync(false);
+                return true;
+            },
+            () => "已折叠全部硬件项目");
+    }
+
+    private async Task RunToolbarOperationAsync(
+        HardwareToolbarOperation operation,
+        string progressMessage,
+        Func<Task<bool>> action,
+        Func<string> successMessage)
+    {
+        if (ViewModel is not { } viewModel || !viewModel.TryBeginHardwareToolbarOperation(operation)) return;
+        MainWindow.Instance?.ShowProgressNotification(progressMessage);
+        await Task.Yield();
+
+        string message;
+        var severity = InfoBarSeverity.Success;
+        try
+        {
+            if (await action()) message = successMessage();
+            else
+            {
+                message = viewModel.StatusText;
+                severity = InfoBarSeverity.Error;
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+            message = $"操作失败: {exception.Message}";
+            severity = InfoBarSeverity.Error;
+        }
+        finally
+        {
+            viewModel.EndHardwareToolbarOperation(operation);
+        }
+
+        MainWindow.Instance?.ShowNotification(message, severity);
+    }
+
+    private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(MainViewModel.ActiveHardwareToolbarOperation) or nameof(MainViewModel.IsHardwareToolbarBusy))
+            UpdateToolbarOperationState();
+    }
+
+    private void UpdateToolbarOperationState()
+    {
+        var operation = ViewModel?.ActiveHardwareToolbarOperation ?? HardwareToolbarOperation.None;
+        var busy = operation != HardwareToolbarOperation.None;
+        RefreshButton.IsEnabled = !busy;
+        ShowHiddenSensorsButton.IsEnabled = !busy;
+        ExpandAllButton.IsEnabled = !busy;
+        CollapseAllButton.IsEnabled = !busy;
+        SearchBox.IsEnabled = !busy;
+        SetOperationVisual(RefreshIcon, RefreshProgress, operation == HardwareToolbarOperation.Refresh);
+        SetOperationVisual(ShowHiddenSensorsIcon, ShowHiddenSensorsProgress, operation == HardwareToolbarOperation.ShowHiddenSensors);
+        SetOperationVisual(ExpandAllIcon, ExpandAllProgress, operation == HardwareToolbarOperation.ExpandAll);
+        SetOperationVisual(CollapseAllIcon, CollapseAllProgress, operation == HardwareToolbarOperation.CollapseAll);
+    }
+
+    private static void SetOperationVisual(FrameworkElement icon, ProgressRing progress, bool active)
+    {
+        icon.Visibility = active ? Visibility.Collapsed : Visibility.Visible;
+        progress.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+        progress.IsActive = active;
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         _searchDebounceTimer.Stop();
-        if (sender is not TextBox searchBox || string.IsNullOrWhiteSpace(searchBox.Text))
+        var version = ++_searchVersion;
+        if (sender is not TextBox searchBox) return;
+        if (string.IsNullOrWhiteSpace(searchBox.Text))
         {
-            MainWindow.Instance?.HideNotification();
+            _ = ApplySearchFilterAsync(string.Empty, version, showResult: false);
+            MainWindow.Instance?.HideTransientNotification();
             return;
         }
         _searchDebounceTimer.Start();
     }
 
-    private void SearchDebounceTimer_Tick(object? sender, object e)
+    private async void SearchDebounceTimer_Tick(object? sender, object e)
     {
         _searchDebounceTimer.Stop();
         if (ViewModel is null) return;
-        var query = ViewModel.SensorFilter.Trim();
-        if (query.Length == 0) return;
+        if (ViewModel.IsHardwareToolbarBusy)
+        {
+            _searchDebounceTimer.Start();
+            return;
+        }
+        await ApplySearchFilterAsync(SearchBox.Text.Trim(), _searchVersion, showResult: true);
+    }
 
-        var (sensorCount, hardwareCount) = CountFilteredItems(ViewModel.HardwareTreeNodes);
+    private async Task ApplySearchFilterAsync(string query, int version, bool showResult)
+    {
+        if (ViewModel is not { } viewModel) return;
+        try
+        {
+            await viewModel.SetSensorFilterAsync(query);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+            if (version == _searchVersion) ShowNotification($"搜索失败: {exception.Message}", InfoBarSeverity.Error);
+            return;
+        }
+        if (version != _searchVersion || !showResult || query.Length == 0) return;
+
+        var (sensorCount, hardwareCount) = CountFilteredItems(viewModel.HardwareTreeNodes);
         if (sensorCount > 0)
         {
             var hardwareSuffix = hardwareCount > 0 ? $"，来自 {hardwareCount} 个硬件" : string.Empty;

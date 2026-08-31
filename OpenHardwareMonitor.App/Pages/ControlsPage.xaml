@@ -2,18 +2,58 @@
     x:Class="OpenHardwareMonitor.App.Pages.ControlsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <Grid Padding="28,22,28,28" RowSpacing="16">
-        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
-        <StackPanel Spacing="4"><TextBlock Style="{StaticResource PageTitleStyle}" Text="控制" /><TextBlock Style="{StaticResource SecondaryTextStyle}" Text="仅显示硬件库提供软件控制通道的设备。应用手动值前请确认主板或设备支持。" /></StackPanel>
-        <ListView Grid.Row="1" ItemsSource="{Binding ControlRows}" SelectionMode="None">
+    <Page.Resources>
+        <Style x:Key="CompactControlListItemStyle" TargetType="ListViewItem">
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style x:Key="CompactControlButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinWidth" Value="76" />
+            <Setter Property="Padding" Value="10,2" />
+        </Style>
+    </Page.Resources>
+
+    <Grid Padding="16,10,16,12" RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <StackPanel Spacing="0">
+            <TextBlock Style="{StaticResource PageTitleStyle}" Text="控制" />
+            <TextBlock Style="{StaticResource SecondaryTextStyle}" Text="仅显示硬件库提供软件控制通道的设备。应用手动值前请确认主板或设备支持。" />
+        </StackPanel>
+        <ListView
+            Grid.Row="1"
+            Padding="0"
+            ItemContainerStyle="{StaticResource CompactControlListItemStyle}"
+            ItemsSource="{Binding ControlRows}"
+            SelectionMode="None"
+            ScrollViewer.HorizontalScrollBarVisibility="Disabled">
             <ListView.ItemTemplate>
                 <DataTemplate>
-                    <Border Style="{StaticResource SurfaceStyle}" Margin="0,0,0,10" Padding="16">
-                        <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="3*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="3"><TextBlock FontWeight="SemiBold" Text="{Binding Name}" /><TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="12" Text="{Binding HardwareName}" /><TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="12" Text="{Binding CurrentValue}" /></StackPanel>
+                    <Border Style="{StaticResource SurfaceStyle}" Margin="0,0,0,4" Padding="12,6" CornerRadius="4">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="3*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="0" VerticalAlignment="Center">
+                                <TextBlock FontWeight="SemiBold" LineHeight="17" Text="{Binding Name}" />
+                                <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="12" LineHeight="15" Text="{Binding HardwareName}" />
+                                <TextBlock Style="{StaticResource SecondaryTextStyle}" FontSize="12" LineHeight="15" Text="{Binding CurrentValue}" />
+                            </StackPanel>
                             <Slider Grid.Column="1" Minimum="0" Maximum="100" Value="{Binding PendingValue, Mode=TwoWay}" VerticalAlignment="Center" />
-                            <Button Grid.Column="2" VerticalAlignment="Center" Click="Apply_Click"><StackPanel Orientation="Horizontal" Spacing="6"><SymbolIcon Symbol="Accept" /><TextBlock Text="应用" /></StackPanel></Button>
-                            <Button Grid.Column="3" VerticalAlignment="Center" Click="Default_Click"><StackPanel Orientation="Horizontal" Spacing="6"><SymbolIcon Symbol="Refresh" /><TextBlock Text="自动" /></StackPanel></Button>
+                            <Button Grid.Column="2" Style="{StaticResource CompactControlButtonStyle}" VerticalAlignment="Center" Click="Apply_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="4"><SymbolIcon Symbol="Accept" /><TextBlock Text="应用" /></StackPanel>
+                            </Button>
+                            <Button Grid.Column="3" Style="{StaticResource CompactControlButtonStyle}" VerticalAlignment="Center" Click="Default_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="4"><SymbolIcon Symbol="Refresh" /><TextBlock Text="自动" /></StackPanel>
+                            </Button>
                         </Grid>
                     </Border>
                 </DataTemplate>

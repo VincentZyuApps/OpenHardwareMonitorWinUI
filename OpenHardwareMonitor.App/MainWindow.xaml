@@ -59,7 +59,7 @@
         <InfoBar
             x:Name="NotificationBar"
             Grid.Row="1"
-            Margin="0,48,16,0"
+            Margin="0,80,16,0"
             HorizontalAlignment="Right"
             VerticalAlignment="Top"
             AutomationProperties.LiveSetting="Polite"

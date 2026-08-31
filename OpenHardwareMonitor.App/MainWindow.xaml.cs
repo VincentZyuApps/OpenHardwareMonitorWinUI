@@ -16,6 +16,7 @@ public sealed partial class MainWindow : WindowEx
     private readonly Dictionary<string, HardwareInfoWindow> _hardwareInfoWindows = new(StringComparer.OrdinalIgnoreCase);
     private int _notificationVersion;
     private Storyboard? _notificationStoryboard;
+    private bool _notificationIsPersistent;
     private bool _exitRequested;
     private bool _initialized;
     private bool _settingsReady;
@@ -74,7 +75,10 @@ public sealed partial class MainWindow : WindowEx
         _refreshTimer.Start();
     }
 
-    private async void RefreshTimer_Tick(object? sender, object e) => await ViewModel.RefreshAsync();
+    private async void RefreshTimer_Tick(object? sender, object e)
+    {
+        if (!ViewModel.IsHardwareToolbarBusy) await ViewModel.RefreshAsync();
+    }
 
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
@@ -131,22 +135,45 @@ public sealed partial class MainWindow : WindowEx
         window.Activate();
     }
 
-    public void ShowNotification(string message, InfoBarSeverity severity)
+    public void ShowNotification(string message, InfoBarSeverity severity) =>
+        ShowNotificationCore(message, severity, persistent: false);
+
+    public void ShowProgressNotification(string message) =>
+        ShowNotificationCore(message, InfoBarSeverity.Informational, persistent: true);
+
+    public void HideTransientNotification()
     {
+        if (!_notificationIsPersistent) HideNotification();
+    }
+
+    private void ShowNotificationCore(string message, InfoBarSeverity severity, bool persistent)
+    {
+        var wasOpen = NotificationBar.IsOpen;
         var version = ++_notificationVersion;
         StopNotificationAnimation();
+        _notificationIsPersistent = persistent;
         NotificationBar.Message = message;
         NotificationBar.Severity = severity;
+        NotificationBar.IsClosable = !persistent;
         NotificationBar.IsOpen = true;
-        NotificationBar.Opacity = 0;
-        NotificationTransform.TranslateY = -8;
 
-        if (!DispatcherQueue.TryEnqueue(() => StartNotificationEntranceAnimation(version)))
+        if (wasOpen)
         {
             NotificationBar.Opacity = 1;
             NotificationTransform.TranslateY = 0;
         }
-        _ = HideNotificationAfterDelayAsync(version);
+        else
+        {
+            NotificationBar.Opacity = 0;
+            NotificationTransform.TranslateY = -8;
+            if (!DispatcherQueue.TryEnqueue(() => StartNotificationEntranceAnimation(version)))
+            {
+                NotificationBar.Opacity = 1;
+                NotificationTransform.TranslateY = 0;
+            }
+        }
+
+        if (!persistent) _ = HideNotificationAfterDelayAsync(version);
     }
 
     private void StartNotificationEntranceAnimation(int version)
@@ -164,6 +191,7 @@ public sealed partial class MainWindow : WindowEx
     public void HideNotification()
     {
         var version = ++_notificationVersion;
+        _notificationIsPersistent = false;
         if (!NotificationBar.IsOpen) return;
         StopNotificationAnimation();
 
