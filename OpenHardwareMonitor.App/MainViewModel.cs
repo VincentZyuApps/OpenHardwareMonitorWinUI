@@ -22,8 +22,28 @@ public enum HardwareToolbarOperation
     CollapseAll
 }
 
+internal enum TreeNodeExpansionOutcome
+{
+    Completed,
+    Canceled,
+    AlreadyRealized
+}
+
+internal sealed record TreeNodeExpansionRequest(
+    TreeViewNode Node,
+    string NodeId,
+    int IntentRevision,
+    bool UserInitiated,
+    bool NeedsRealization,
+    bool TracksInteraction,
+    CancellationTokenSource? CancellationSource)
+{
+    public CancellationToken Token => CancellationSource?.Token ?? CancellationToken.None;
+}
+
 public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 {
+    private static readonly SensorPresentationSettings DefaultSensorPresentation = new();
     private readonly SettingsStore _settingsStore;
     private readonly HardwareMonitorService _hardware;
     private readonly CsvLoggingService _logger;
@@ -31,11 +51,19 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly Dictionary<string, TreeViewNode> _treeNodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, HardwareTreeItemViewModel> _treeItems = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _programmaticExpansionChanges = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LazyTreeNodeState> _lazyTreeStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _internalExpansionEvents = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _internalCollapseEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _treeMutationGate = new(1, 1);
     private readonly object _refreshSync = new();
+    private readonly object _treeSettingsSaveSync = new();
     private Task<bool> _activeRefreshTask = Task.FromResult(true);
+    private Task _pendingTreeSettingsSave = Task.CompletedTask;
+    private CancellationTokenSource? _treeSettingsSaveCancellation;
     private bool _initialized;
+    private bool _isFlushingTreeSettings;
     private int _hardwareToolbarOperationActive;
+    private int _activeTreeNodeLoadCount;
 
     public MainViewModel(SettingsStore settingsStore, HardwareMonitorService hardware, CsvLoggingService logger, RemoteWebServer webServer)
     {
@@ -68,6 +96,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     [ObservableProperty] private HardwareToolbarOperation _activeHardwareToolbarOperation;
 
     public bool IsHardwareToolbarBusy => ActiveHardwareToolbarOperation != HardwareToolbarOperation.None;
+    public bool IsHardwareTreeBusy => IsHardwareToolbarBusy || Volatile.Read(ref _activeTreeNodeLoadCount) > 0;
 
     public event EventHandler? ThemeChanged;
     public event EventHandler? SettingsLoaded;
@@ -233,7 +262,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     public async Task SetChartVisibleAsync(string sensorId, bool visible)
     {
         Settings.ChartSelectionInitialized = true;
-        GetSensorPresentation(sensorId).ShowInChart = visible;
+        GetOrCreateSensorPresentation(sensorId).ShowInChart = visible;
         var candidate = ChartCandidates.FirstOrDefault(item => string.Equals(item.SensorId, sensorId, StringComparison.OrdinalIgnoreCase));
         if (candidate is not null) candidate.IsSelected = visible;
         await SaveSettingsAsync();
@@ -245,7 +274,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         await _treeMutationGate.WaitAsync();
         try
         {
-            GetSensorPresentation(sensorId).IsHidden = hidden;
+            GetOrCreateSensorPresentation(sensorId).IsHidden = hidden;
             await SaveSettingsAsync();
             await RebuildHardwareTreeAsync(Snapshot, new UiWorkBudget());
             ProjectFlatRows(Snapshot);
@@ -261,7 +290,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         await _treeMutationGate.WaitAsync();
         try
         {
-            GetSensorPresentation(sensorId).DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+            GetOrCreateSensorPresentation(sensorId).DisplayName = string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
             await SaveSettingsAsync();
             await ProjectSnapshotAsync(Snapshot);
         }
@@ -273,13 +302,13 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     public async Task SetSensorTrayVisibleAsync(string sensorId, bool visible)
     {
-        GetSensorPresentation(sensorId).ShowInTray = visible;
+        GetOrCreateSensorPresentation(sensorId).ShowInTray = visible;
         await SaveSettingsAsync();
     }
 
     public async Task SetSensorGadgetVisibleAsync(string sensorId, bool visible)
     {
-        GetSensorPresentation(sensorId).ShowInGadget = visible;
+        GetOrCreateSensorPresentation(sensorId).ShowInGadget = visible;
         await SaveSettingsAsync();
     }
 
@@ -297,19 +326,167 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public async Task SetTreeNodeExpandedAsync(TreeViewNode node, bool expanded)
+    internal TreeNodeExpansionRequest? BeginTreeNodeExpansion(TreeViewNode node)
     {
-        if (node.Content is not HardwareTreeItemViewModel item) return;
-        node.IsExpanded = expanded;
-        if (_programmaticExpansionChanges.Remove(item.Id, out var expected) && expected == expanded) return;
-        if (IsHardwareToolbarBusy)
+        if (node.Content is not HardwareTreeItemViewModel item) return null;
+
+        node.IsExpanded = true;
+        var userInitiated = !(_programmaticExpansionChanges.Remove(item.Id, out var expected) && expected);
+        if (_internalExpansionEvents.Remove(item.Id)) return null;
+        var state = GetLazyTreeState(item.Id);
+        var revision = ++state.IntentRevision;
+        CancelSafely(state.LoadCancellation);
+
+        if (userInitiated && string.IsNullOrWhiteSpace(SensorFilter))
         {
-            SetExpandedProgrammatically(node, item.Id, !expanded);
-            return;
+            Settings.ExpandedNodes[item.Id] = true;
+            ScheduleTreeSettingsSave();
         }
-        if (!string.IsNullOrWhiteSpace(SensorFilter)) return;
-        Settings.ExpandedNodes[item.Id] = expanded;
-        await SaveSettingsAsync();
+
+        var needsRealization = !state.IsRealized && state.DesiredChildren.Count > 0;
+        var tracksInteraction = state.DesiredChildren.Count > 0;
+        CancellationTokenSource? cancellationSource = null;
+        if (tracksInteraction)
+        {
+            cancellationSource = new CancellationTokenSource();
+            state.LoadCancellation = cancellationSource;
+            IncrementTreeBusyCount();
+            try
+            {
+                item.SetExpansionBusy(true);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write(exception);
+            }
+        }
+
+        return new TreeNodeExpansionRequest(
+            node,
+            item.Id,
+            revision,
+            userInitiated,
+            needsRealization,
+            tracksInteraction,
+            cancellationSource);
+    }
+
+    internal async Task<TreeNodeExpansionOutcome> RealizeTreeNodeChildrenAsync(TreeNodeExpansionRequest request)
+    {
+        if (!request.NeedsRealization) return TreeNodeExpansionOutcome.AlreadyRealized;
+
+        try
+        {
+            await _treeMutationGate.WaitAsync(request.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return TreeNodeExpansionOutcome.Canceled;
+        }
+
+        try
+        {
+            var state = GetLazyTreeState(request.NodeId);
+            if (!IsCurrentExpansion(request, state)) return TreeNodeExpansionOutcome.Canceled;
+
+            var budget = new UiWorkBudget();
+            var completed = await ReconcileChildrenAsync(
+                request.Node,
+                state.DesiredChildren,
+                budget,
+                () => IsCurrentExpansion(request, state));
+            if (!completed || !IsCurrentExpansion(request, state))
+            {
+                state.IsRealized = false;
+                request.Node.HasUnrealizedChildren = state.DesiredChildren.Count > 0;
+                return TreeNodeExpansionOutcome.Canceled;
+            }
+
+            state.IsRealized = true;
+            request.Node.HasUnrealizedChildren = false;
+            ApplyDesiredExpansionToChildren(state.DesiredChildren);
+            return TreeNodeExpansionOutcome.Completed;
+        }
+        catch
+        {
+            if (_lazyTreeStates.TryGetValue(request.NodeId, out var state))
+            {
+                state.IsRealized = false;
+                request.Node.HasUnrealizedChildren = state.DesiredChildren.Count > 0;
+            }
+            throw;
+        }
+        finally
+        {
+            _treeMutationGate.Release();
+        }
+    }
+
+    internal void EndTreeNodeExpansion(TreeNodeExpansionRequest request)
+    {
+        var hasState = _lazyTreeStates.TryGetValue(request.NodeId, out var state);
+        try
+        {
+            if (hasState && state!.IntentRevision == request.IntentRevision &&
+                request.Node.Content is HardwareTreeItemViewModel item)
+                item.SetExpansionBusy(false);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        finally
+        {
+            if (hasState && ReferenceEquals(state!.LoadCancellation, request.CancellationSource))
+                state.LoadCancellation = null;
+            request.CancellationSource?.Dispose();
+            if (request.TracksInteraction) DecrementTreeBusyCount();
+        }
+    }
+
+    internal bool SetTreeNodeCollapsed(TreeViewNode node)
+    {
+        if (node.Content is not HardwareTreeItemViewModel item) return false;
+
+        node.IsExpanded = false;
+        _internalExpansionEvents.Remove(item.Id);
+        var userInitiated = !(_programmaticExpansionChanges.Remove(item.Id, out var expected) && !expected);
+        var internalCollapse = _internalCollapseEvents.Remove(item.Id);
+        var state = GetLazyTreeState(item.Id);
+        state.IntentRevision++;
+        CancelSafely(state.LoadCancellation);
+        try
+        {
+            item.SetExpansionBusy(false);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+
+        if (userInitiated && string.IsNullOrWhiteSpace(SensorFilter))
+        {
+            Settings.ExpandedNodes.Remove(item.Id);
+            ScheduleTreeSettingsSave();
+        }
+
+        var moveSelectionToParent = SelectedTreeItem is { } selected &&
+                                    ContainsDesiredDescendant(node, selected.Id);
+        if (moveSelectionToParent)
+        {
+            try
+            {
+                SelectedTreeItem = item;
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write(exception);
+            }
+        }
+
+        if (!internalCollapse && state.DesiredChildren.Count > 0)
+            _ = UnrealizeCollapsedSubtreeAsync(node, state.IntentRevision);
+        return moveSelectionToParent;
     }
 
     public async Task ExpandAllAsync(bool expanded)
@@ -320,12 +497,12 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             var budget = new UiWorkBudget();
             foreach (var root in HardwareTreeNodes)
                 await SetExpandedRecursiveAsync(root, expanded, budget);
-            await SaveSettingsAsync();
         }
         finally
         {
             _treeMutationGate.Release();
         }
+        await SaveSettingsAsync();
     }
 
     public async Task SetShowHiddenSensorsAsync(bool value)
@@ -348,6 +525,8 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         await _treeMutationGate.WaitAsync();
         try
         {
+            if (!string.IsNullOrWhiteSpace(SensorFilter) && string.IsNullOrWhiteSpace(value))
+                foreach (var root in HardwareTreeNodes) ApplyStoredExpansionBeforeFilterClear(root);
             SensorFilter = value;
             await RebuildHardwareTreeAsync(Snapshot, new UiWorkBudget());
         }
@@ -399,6 +578,73 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(SettingsPath));
     }
 
+    public async Task FlushPendingSettingsAsync()
+    {
+        Task pendingSave;
+        CancellationTokenSource? cancellationSource;
+        lock (_treeSettingsSaveSync)
+        {
+            _isFlushingTreeSettings = true;
+            cancellationSource = _treeSettingsSaveCancellation;
+            pendingSave = _pendingTreeSettingsSave;
+        }
+
+        CancelSafely(cancellationSource);
+        try
+        {
+            await pendingSave;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        await SaveSettingsAsync();
+    }
+
+    private void ScheduleTreeSettingsSave()
+    {
+        var cancellationSource = new CancellationTokenSource();
+        CancellationTokenSource? previous;
+        lock (_treeSettingsSaveSync)
+        {
+            if (_isFlushingTreeSettings)
+            {
+                cancellationSource.Dispose();
+                return;
+            }
+            previous = _treeSettingsSaveCancellation;
+            _treeSettingsSaveCancellation = cancellationSource;
+            _pendingTreeSettingsSave = SaveTreeSettingsAfterDelayAsync(_pendingTreeSettingsSave, cancellationSource);
+        }
+        CancelSafely(previous);
+    }
+
+    private async Task SaveTreeSettingsAfterDelayAsync(Task predecessor, CancellationTokenSource cancellationSource)
+    {
+        try
+        {
+            await predecessor;
+            await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationSource.Token);
+            await SaveSettingsAsync();
+        }
+        catch (OperationCanceledException) when (cancellationSource.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        finally
+        {
+            lock (_treeSettingsSaveSync)
+            {
+                if (ReferenceEquals(_treeSettingsSaveCancellation, cancellationSource))
+                    _treeSettingsSaveCancellation = null;
+            }
+            cancellationSource.Dispose();
+        }
+    }
+
     private void NotifyHardwareColumnWidthsChanged()
     {
         OnPropertyChanged(nameof(ValueColumnWidth));
@@ -443,9 +689,15 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task RebuildHardwareTreeAsync(HardwareSnapshot snapshot, UiWorkBudget budget)
     {
+        var liveNodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var liveSensorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var hardware in snapshot.Hardware)
+            CollectLiveTreeNodeIds(hardware, liveNodeIds, liveSensorIds);
+
         if (snapshot.Hardware.Count == 0)
         {
-            HardwareTreeNodes.Clear();
+            await ReconcileRootNodesAsync(Array.Empty<TreeViewNode>(), budget);
+            if (PruneTreeCaches(liveNodeIds, liveSensorIds)) ScheduleTreeSettingsSave();
             return;
         }
 
@@ -457,6 +709,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             await budget.YieldIfNeededAsync();
         }
         await ReconcileRootNodesAsync(roots, budget);
+        if (PruneTreeCaches(liveNodeIds, liveSensorIds)) ScheduleTreeSettingsSave();
     }
 
     private async Task<TreeViewNode?> BuildHardwareNodeAsync(HardwareNodeSnapshot snapshot, UiWorkBudget budget)
@@ -485,8 +738,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         var item = GetTreeItem(snapshot.Id);
         item.UpdateHardware(snapshot, BuildHardwareSummary(snapshot));
         var node = GetTreeNode(item, defaultExpanded: false);
-        await ReconcileChildrenAsync(node, desiredChildren, budget);
-        ApplyFilterExpansion(node, desiredChildren.Count > 0);
+        await UpdateLazyChildrenAsync(node, desiredChildren, budget);
         await budget.YieldIfNeededAsync();
         return node;
     }
@@ -510,8 +762,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             desiredChildren.Add(GetTreeNode(sensorItem, defaultExpanded: false));
             await budget.YieldIfNeededAsync();
         }
-        await ReconcileChildrenAsync(node, desiredChildren, budget);
-        ApplyFilterExpansion(node, desiredChildren.Count > 0);
+        await UpdateLazyChildrenAsync(node, desiredChildren, budget);
         return node;
     }
 
@@ -525,7 +776,9 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         for (var index = HardwareTreeNodes.Count - 1; index >= 0; index--)
         {
             if (desiredNodes.Contains(HardwareTreeNodes[index])) continue;
+            var removed = HardwareTreeNodes[index];
             HardwareTreeNodes.RemoveAt(index);
+            await PrepareDetachedRootForReuseAsync(removed, budget);
             await budget.YieldIfNeededAsync();
         }
 
@@ -539,6 +792,88 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    private async Task PrepareDetachedRootForReuseAsync(TreeViewNode root, UiWorkBudget budget)
+    {
+        var rootId = GetNodeId(root);
+        if (!_lazyTreeStates.TryGetValue(rootId, out var state)) return;
+
+        state.IntentRevision++;
+        CancelSafely(state.LoadCancellation);
+        if (root.Content is HardwareTreeItemViewModel item)
+        {
+            try
+            {
+                item.SetExpansionBusy(false);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write(exception);
+            }
+        }
+
+        if (SelectedTreeItem is { } selected &&
+            (string.Equals(rootId, selected.Id, StringComparison.OrdinalIgnoreCase) ||
+             ContainsDesiredDescendant(root, selected.Id)))
+            SelectedTreeItem = null;
+
+        if (root.IsExpanded)
+        {
+            _internalCollapseEvents.Add(rootId);
+            try
+            {
+                SetExpandedProgrammatically(root, rootId, false);
+            }
+            finally
+            {
+                _internalCollapseEvents.Remove(rootId);
+            }
+        }
+
+        await UnrealizeSubtreeCoreAsync(root, budget, () => true);
+    }
+
+    private static void CollectLiveTreeNodeIds(
+        HardwareNodeSnapshot hardware,
+        ISet<string> nodeIds,
+        ISet<string> sensorIds)
+    {
+        nodeIds.Add(hardware.Id);
+        foreach (var sensor in hardware.Sensors)
+        {
+            nodeIds.Add($"{hardware.Id}/type/{sensor.Type}");
+            nodeIds.Add(sensor.Id);
+            sensorIds.Add(sensor.Id);
+        }
+        foreach (var child in hardware.Children)
+            CollectLiveTreeNodeIds(child, nodeIds, sensorIds);
+    }
+
+    private bool PruneTreeCaches(IReadOnlySet<string> liveNodeIds, IReadOnlySet<string> liveSensorIds)
+    {
+        var settingsChanged = false;
+        foreach (var nodeId in Settings.ExpandedNodes.Keys
+                     .Where(nodeId => !liveNodeIds.Contains(nodeId) || liveSensorIds.Contains(nodeId))
+                     .ToArray())
+        {
+            Settings.ExpandedNodes.Remove(nodeId);
+            settingsChanged = true;
+        }
+
+        if (SelectedTreeItem is { } selected && !liveNodeIds.Contains(selected.Id))
+            SelectedTreeItem = null;
+
+        foreach (var nodeId in _treeNodes.Keys.Where(nodeId => !liveNodeIds.Contains(nodeId)).ToArray())
+        {
+            if (_lazyTreeStates.Remove(nodeId, out var state)) CancelSafely(state.LoadCancellation);
+            if (_treeItems.Remove(nodeId, out var item)) item.Node = null;
+            _treeNodes.Remove(nodeId);
+            _programmaticExpansionChanges.Remove(nodeId);
+            _internalExpansionEvents.Remove(nodeId);
+            _internalCollapseEvents.Remove(nodeId);
+        }
+        return settingsChanged;
+    }
+
     private TreeViewNode GetTreeNode(HardwareTreeItemViewModel item, bool defaultExpanded)
     {
         item.UpdateColumnVisibility(Settings);
@@ -546,42 +881,91 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         {
             if (!ReferenceEquals(existing.Content, item)) existing.Content = item;
             item.Node = existing;
-            if (string.IsNullOrWhiteSpace(SensorFilter))
-                SetExpandedProgrammatically(existing, item.Id, Settings.ExpandedNodes.TryGetValue(item.Id, out var existingExpanded) ? existingExpanded : defaultExpanded);
             return existing;
         }
 
-        var initialExpanded = Settings.ExpandedNodes.TryGetValue(item.Id, out var expanded) ? expanded : defaultExpanded;
         var node = new TreeViewNode
         {
             Content = item,
-            IsExpanded = initialExpanded
+            IsExpanded = defaultExpanded
         };
-        if (initialExpanded) _programmaticExpansionChanges[item.Id] = true;
         _treeNodes[item.Id] = node;
         item.Node = node;
         return node;
-    }
-
-    private void ApplyFilterExpansion(TreeViewNode node, bool hasMatchingChildren)
-    {
-        if (!string.IsNullOrWhiteSpace(SensorFilter) && hasMatchingChildren)
-            SetExpandedProgrammatically(node, GetNodeId(node), true);
     }
 
     private void SetExpandedProgrammatically(TreeViewNode node, string id, bool expanded)
     {
         if (node.IsExpanded == expanded) return;
         _programmaticExpansionChanges[id] = expanded;
-        node.IsExpanded = expanded;
+        try
+        {
+            node.IsExpanded = expanded;
+        }
+        finally
+        {
+            _programmaticExpansionChanges.Remove(id);
+        }
     }
 
-    private static async Task ReconcileChildrenAsync(TreeViewNode parent, IReadOnlyList<TreeViewNode> desired, UiWorkBudget budget)
+    internal void ApplyDesiredRootExpansions()
     {
-        var currentIds = parent.Children.Select(GetNodeId).ToArray();
-        var desiredIds = desired.Select(GetNodeId).ToArray();
-        if (currentIds.SequenceEqual(desiredIds, StringComparer.OrdinalIgnoreCase)) return;
+        foreach (var root in HardwareTreeNodes) ApplyDesiredExpansionTree(root);
+    }
 
+    public (int SensorCount, int HardwareCount) CountProjectedTreeItems()
+    {
+        var sensorCount = 0;
+        var hardwareCount = 0;
+        foreach (var root in HardwareTreeNodes)
+            CountProjectedTreeItems(root, ref sensorCount, ref hardwareCount);
+        return (sensorCount, hardwareCount);
+    }
+
+    private void CountProjectedTreeItems(TreeViewNode node, ref int sensorCount, ref int hardwareCount)
+    {
+        if (node.Content is HardwareTreeItemViewModel item)
+        {
+            if (item.IsSensor) sensorCount++;
+            else if (item.Kind == MonitorTreeNodeKind.Hardware) hardwareCount++;
+        }
+
+        foreach (var child in GetDesiredChildren(node))
+            CountProjectedTreeItems(child, ref sensorCount, ref hardwareCount);
+    }
+
+    private async Task UpdateLazyChildrenAsync(TreeViewNode parent, IReadOnlyList<TreeViewNode> desired, UiWorkBudget budget)
+    {
+        var state = GetLazyTreeState(GetNodeId(parent));
+        state.DesiredChildren = desired.ToArray();
+
+        if (desired.Count == 0)
+        {
+            await ReconcileChildrenAsync(parent, desired, budget);
+            state.IsRealized = true;
+            parent.HasUnrealizedChildren = false;
+            return;
+        }
+
+        if (state.IsRealized)
+        {
+            state.IsRealized = await ReconcileChildrenAsync(parent, state.DesiredChildren, budget);
+            parent.HasUnrealizedChildren = !state.IsRealized;
+            return;
+        }
+
+        await TrimUnrealizedChildrenAsync(parent, state.DesiredChildren, budget);
+        var matchesDesired = parent.Children.Select(GetNodeId)
+            .SequenceEqual(state.DesiredChildren.Select(GetNodeId), StringComparer.OrdinalIgnoreCase);
+        state.IsRealized = matchesDesired;
+        parent.HasUnrealizedChildren = !matchesDesired;
+    }
+
+    private static async Task TrimUnrealizedChildrenAsync(
+        TreeViewNode parent,
+        IReadOnlyList<TreeViewNode> desired,
+        UiWorkBudget budget)
+    {
         var desiredNodes = desired.ToHashSet(ReferenceEqualityComparer.Instance);
         for (var index = parent.Children.Count - 1; index >= 0; index--)
         {
@@ -589,15 +973,236 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
             parent.Children.RemoveAt(index);
             await budget.YieldIfNeededAsync();
         }
+    }
+
+    private async Task<bool> ReconcileChildrenAsync(
+        TreeViewNode parent,
+        IReadOnlyList<TreeViewNode> desired,
+        UiWorkBudget budget,
+        Func<bool>? canContinue = null)
+    {
+        if (canContinue is not null && !canContinue()) return false;
+        var currentIds = parent.Children.Select(GetNodeId).ToArray();
+        var desiredIds = desired.Select(GetNodeId).ToArray();
+        if (currentIds.SequenceEqual(desiredIds, StringComparer.OrdinalIgnoreCase)) return true;
+
+        var desiredNodes = desired.ToHashSet(ReferenceEqualityComparer.Instance);
+        for (var index = parent.Children.Count - 1; index >= 0; index--)
+        {
+            if (canContinue is not null && !canContinue()) return false;
+            if (desiredNodes.Contains(parent.Children[index])) continue;
+            parent.Children.RemoveAt(index);
+            await budget.YieldIfNeededAsync();
+            if (canContinue is not null && !canContinue()) return false;
+        }
 
         for (var index = 0; index < desired.Count; index++)
         {
+            if (canContinue is not null && !canContinue()) return false;
             if (index < parent.Children.Count && ReferenceEquals(parent.Children[index], desired[index])) continue;
             var currentIndex = parent.Children.IndexOf(desired[index]);
             if (currentIndex >= 0) parent.Children.RemoveAt(currentIndex);
             parent.Children.Insert(index, desired[index]);
             await budget.YieldIfNeededAsync();
+            if (canContinue is not null && !canContinue()) return false;
         }
+        return true;
+    }
+
+    private LazyTreeNodeState GetLazyTreeState(string nodeId)
+    {
+        if (_lazyTreeStates.TryGetValue(nodeId, out var state)) return state;
+        state = new LazyTreeNodeState();
+        _lazyTreeStates[nodeId] = state;
+        return state;
+    }
+
+    private IReadOnlyList<TreeViewNode> GetDesiredChildren(TreeViewNode node) =>
+        _lazyTreeStates.TryGetValue(GetNodeId(node), out var state)
+            ? state.DesiredChildren
+            : node.Children.ToArray();
+
+    private bool IsCurrentExpansion(TreeNodeExpansionRequest request, LazyTreeNodeState state) =>
+        state.IntentRevision == request.IntentRevision &&
+        !request.Token.IsCancellationRequested &&
+        request.Node.IsExpanded;
+
+    private async Task UnrealizeCollapsedSubtreeAsync(TreeViewNode node, int intentRevision)
+    {
+        IncrementTreeBusyCount();
+        try
+        {
+            await Task.Delay(24);
+            await _treeMutationGate.WaitAsync();
+            try
+            {
+                var state = GetLazyTreeState(GetNodeId(node));
+                if (state.IntentRevision != intentRevision || node.IsExpanded)
+                    return;
+
+                var budget = new UiWorkBudget();
+                await UnrealizeSubtreeCoreAsync(
+                    node,
+                    budget,
+                    () => state.IntentRevision == intentRevision && !node.IsExpanded);
+            }
+            finally
+            {
+                _treeMutationGate.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        finally
+        {
+            DecrementTreeBusyCount();
+        }
+    }
+
+    private async Task<bool> UnrealizeSubtreeCoreAsync(
+        TreeViewNode node,
+        UiWorkBudget budget,
+        Func<bool> canContinue)
+    {
+        if (!canContinue()) return false;
+        var state = GetLazyTreeState(GetNodeId(node));
+        state.IsRealized = false;
+        node.HasUnrealizedChildren = state.DesiredChildren.Count > 0;
+
+        foreach (var child in state.DesiredChildren)
+        {
+            if (!canContinue()) return false;
+            if (!_lazyTreeStates.TryGetValue(GetNodeId(child), out var childState) ||
+                childState.DesiredChildren.Count == 0)
+                continue;
+
+            childState.IntentRevision++;
+            CancelSafely(childState.LoadCancellation);
+            if (child.Content is HardwareTreeItemViewModel childItem)
+            {
+                try
+                {
+                    childItem.SetExpansionBusy(false);
+                }
+                catch (Exception exception)
+                {
+                    AppLog.Write(exception);
+                }
+            }
+
+            if (child.IsExpanded)
+            {
+                var childId = GetNodeId(child);
+                _internalCollapseEvents.Add(childId);
+                try
+                {
+                    SetExpandedProgrammatically(child, childId, false);
+                }
+                finally
+                {
+                    _internalCollapseEvents.Remove(childId);
+                }
+            }
+            await UnrealizeSubtreeCoreAsync(child, budget, canContinue);
+        }
+
+        while (node.Children.Count > 0)
+        {
+            if (!canContinue()) return false;
+            node.Children.RemoveAt(node.Children.Count - 1);
+            await budget.YieldIfNeededAsync();
+        }
+        return canContinue();
+    }
+
+    private bool ContainsDesiredDescendant(TreeViewNode node, string nodeId)
+    {
+        foreach (var child in GetDesiredChildren(node))
+        {
+            if (string.Equals(GetNodeId(child), nodeId, StringComparison.OrdinalIgnoreCase) ||
+                ContainsDesiredDescendant(child, nodeId))
+                return true;
+        }
+        return false;
+    }
+
+    private void IncrementTreeBusyCount()
+    {
+        Interlocked.Increment(ref _activeTreeNodeLoadCount);
+        NotifyHardwareTreeBusyChanged();
+    }
+
+    private void DecrementTreeBusyCount()
+    {
+        Interlocked.Decrement(ref _activeTreeNodeLoadCount);
+        NotifyHardwareTreeBusyChanged();
+    }
+
+    private void NotifyHardwareTreeBusyChanged()
+    {
+        try
+        {
+            OnPropertyChanged(nameof(IsHardwareTreeBusy));
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+    }
+
+    private static void CancelSafely(CancellationTokenSource? cancellationSource)
+    {
+        if (cancellationSource is null) return;
+        try
+        {
+            cancellationSource.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private void ApplyDesiredExpansionTree(TreeViewNode node)
+    {
+        var nodeId = GetNodeId(node);
+        if (!_lazyTreeStates.TryGetValue(nodeId, out var state) || state.DesiredChildren.Count == 0) return;
+        var expanded = !string.IsNullOrWhiteSpace(SensorFilter) ||
+                       Settings.ExpandedNodes.TryGetValue(nodeId, out var stored) && stored;
+
+        var loadInProgress = state.LoadCancellation is { IsCancellationRequested: false };
+        if (expanded && node.IsExpanded && !state.IsRealized && !loadInProgress)
+        {
+            _internalCollapseEvents.Add(nodeId);
+            try
+            {
+                SetExpandedProgrammatically(node, nodeId, false);
+            }
+            finally
+            {
+                _internalCollapseEvents.Remove(nodeId);
+            }
+        }
+        if (loadInProgress) return;
+        SetExpandedProgrammatically(node, nodeId, expanded);
+        if (!expanded || !state.IsRealized) return;
+        foreach (var child in state.DesiredChildren) ApplyDesiredExpansionTree(child);
+    }
+
+    private void ApplyDesiredExpansionToChildren(IEnumerable<TreeViewNode> children)
+    {
+        foreach (var child in children) ApplyDesiredExpansionTree(child);
+    }
+
+    private void ApplyStoredExpansionBeforeFilterClear(TreeViewNode node)
+    {
+        var nodeId = GetNodeId(node);
+        if (!_lazyTreeStates.TryGetValue(nodeId, out var state) || state.DesiredChildren.Count == 0) return;
+        var expanded = Settings.ExpandedNodes.TryGetValue(nodeId, out var stored) && stored;
+        SetExpandedProgrammatically(node, nodeId, expanded);
+        if (!expanded || !state.IsRealized) return;
+        foreach (var child in state.DesiredChildren) ApplyStoredExpansionBeforeFilterClear(child);
     }
 
     private HardwareTreeItemViewModel GetTreeItem(string id)
@@ -628,7 +1233,7 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (Settings.ChartSelectionInitialized || snapshot.Sensors.Count == 0) return;
         foreach (var sensor in snapshot.Sensors.Where(item => item.Value is not null && (item.Type is "Temperature" or "Load" or "Power")).Take(4))
-            GetSensorPresentation(sensor.Id).ShowInChart = true;
+            GetOrCreateSensorPresentation(sensor.Id).ShowInChart = true;
         Settings.ChartSelectionInitialized = true;
     }
 
@@ -695,7 +1300,10 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    private SensorPresentationSettings GetSensorPresentation(string sensorId)
+    private SensorPresentationSettings GetSensorPresentation(string sensorId) =>
+        Settings.Sensors.TryGetValue(sensorId, out var value) ? value : DefaultSensorPresentation;
+
+    private SensorPresentationSettings GetOrCreateSensorPresentation(string sensorId)
     {
         if (!Settings.Sensors.TryGetValue(sensorId, out var value))
             Settings.Sensors[sensorId] = value = new SensorPresentationSettings();
@@ -717,33 +1325,87 @@ public sealed partial class MainViewModel : ObservableObject, IAsyncDisposable
 
     private async Task SetExpandedRecursiveAsync(TreeViewNode node, bool expanded, UiWorkBudget budget)
     {
-        if (node.Children.Count == 0) return;
-        if (expanded && node.Content is HardwareTreeItemViewModel expandingItem)
+        var desiredChildren = GetDesiredChildren(node);
+        if (desiredChildren.Count == 0 || node.Content is not HardwareTreeItemViewModel item) return;
+
+        var state = GetLazyTreeState(item.Id);
+        state.IntentRevision++;
+        CancelSafely(state.LoadCancellation);
+        try
         {
-            SetExpandedProgrammatically(node, expandingItem.Id, true);
-            Settings.ExpandedNodes[expandingItem.Id] = true;
+            item.SetExpansionBusy(false);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+
+        if (expanded)
+        {
+            Settings.ExpandedNodes[item.Id] = true;
+            if (!node.IsExpanded) _internalExpansionEvents.Add(item.Id);
+            try
+            {
+                SetExpandedProgrammatically(node, item.Id, true);
+            }
+            finally
+            {
+                _internalExpansionEvents.Remove(item.Id);
+            }
+            state.IsRealized = await ReconcileChildrenAsync(node, desiredChildren, budget);
+            node.HasUnrealizedChildren = !state.IsRealized;
             await budget.YieldIfNeededAsync(force: true);
         }
-        foreach (var child in node.Children)
+
+        foreach (var child in desiredChildren)
             await SetExpandedRecursiveAsync(child, expanded, budget);
-        if (!expanded && node.Content is HardwareTreeItemViewModel collapsingItem)
+
+        if (!expanded)
         {
-            SetExpandedProgrammatically(node, collapsingItem.Id, false);
-            Settings.ExpandedNodes[collapsingItem.Id] = false;
+            Settings.ExpandedNodes.Remove(item.Id);
+            _internalExpansionEvents.Remove(item.Id);
+            if (node.IsExpanded) _internalCollapseEvents.Add(item.Id);
+            try
+            {
+                SetExpandedProgrammatically(node, item.Id, false);
+                state.IsRealized = false;
+                node.HasUnrealizedChildren = true;
+                while (node.Children.Count > 0)
+                {
+                    node.Children.RemoveAt(node.Children.Count - 1);
+                    await budget.YieldIfNeededAsync();
+                }
+            }
+            finally
+            {
+                _internalCollapseEvents.Remove(item.Id);
+            }
             await budget.YieldIfNeededAsync(force: true);
         }
+    }
+
+    private sealed class LazyTreeNodeState
+    {
+        public IReadOnlyList<TreeViewNode> DesiredChildren { get; set; } = Array.Empty<TreeViewNode>();
+        public bool IsRealized { get; set; }
+        public int IntentRevision { get; set; }
+        public CancellationTokenSource? LoadCancellation { get; set; }
     }
 
     private sealed class UiWorkBudget
     {
         private static readonly TimeSpan MaximumSlice = TimeSpan.FromMilliseconds(8);
+        private const int MaximumOperationsPerSlice = 8;
         private readonly Stopwatch _stopwatch = Stopwatch.StartNew();
+        private int _operations;
 
         public async ValueTask YieldIfNeededAsync(bool force = false)
         {
-            if (!force && _stopwatch.Elapsed < MaximumSlice) return;
+            _operations++;
+            if (!force && _operations < MaximumOperationsPerSlice && _stopwatch.Elapsed < MaximumSlice) return;
             await Task.Delay(1);
             _stopwatch.Restart();
+            _operations = 0;
         }
     }
 
@@ -795,6 +1457,7 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
     private bool _showValueColumn = true;
     private bool _showMinimumColumn = true;
     private bool _showMaximumColumn = true;
+    private bool _isExpansionBusy;
     private double _valueColumnWidth = 80;
     private double _minimumColumnWidth = 80;
     private double _maximumColumnWidth = 80;
@@ -818,6 +1481,8 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
     public bool ShowValueColumn => _showValueColumn;
     public bool ShowMinimumColumn => _showMinimumColumn;
     public bool ShowMaximumColumn => _showMaximumColumn;
+    public bool IsExpansionBusy => _isExpansionBusy;
+    public bool IsExpansionIdle => !_isExpansionBusy;
     public double ValueColumnWidth => _valueColumnWidth;
     public double MinimumColumnWidth => _minimumColumnWidth;
     public double MaximumColumnWidth => _maximumColumnWidth;
@@ -826,6 +1491,12 @@ public sealed class HardwareTreeItemViewModel : ObservableObject
     public bool IsSensor => Kind == MonitorTreeNodeKind.Sensor;
     public string KindLabel => Kind switch { MonitorTreeNodeKind.Hardware => "硬件", MonitorTreeNodeKind.SensorType => "类型", _ => "传感器" };
     public string IconGlyph => Kind switch { MonitorTreeNodeKind.Hardware => "\uE950", MonitorTreeNodeKind.SensorType => "\uE8FD", _ => "\uE950" };
+
+    public void SetExpansionBusy(bool value)
+    {
+        if (!SetProperty(ref _isExpansionBusy, value, nameof(IsExpansionBusy))) return;
+        OnPropertyChanged(nameof(IsExpansionIdle));
+    }
 
     public void UpdateHardware(HardwareNodeSnapshot snapshot, string summary)
     {

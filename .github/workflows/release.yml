@@ -82,6 +82,22 @@ jobs:
         run: dotnet test OpenHardwareMonitor.App.Tests/OpenHardwareMonitor.App.Tests.csproj -c Release --no-build --no-restore -p:Platform=x64
       - name: Publish self-contained app
         run: dotnet publish OpenHardwareMonitor.App/OpenHardwareMonitor.App.csproj -c Release -r win-x64 --self-contained true --no-restore -o artifacts/OpenHardwareMonitor-$env:VERSION-win-x64
+      - name: Verify WinUI publish resources
+        shell: pwsh
+        run: |
+          $publishDir = "artifacts/OpenHardwareMonitor-$env:VERSION-win-x64"
+          $required = @(
+            "App.xbf",
+            "GadgetWindow.xbf",
+            "HardwareInfoWindow.xbf",
+            "MainWindow.xbf",
+            "Pages/ChartsPage.xbf",
+            "Pages/ControlsPage.xbf",
+            "Pages/HardwarePage.xbf",
+            "Pages/SettingsPage.xbf"
+          )
+          $missing = $required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $publishDir $_)) }
+          if ($missing) { throw "Published app is missing WinUI resources: $($missing -join ', ')" }
       - id: bundle
         name: Create ZIP and checksum
         shell: pwsh

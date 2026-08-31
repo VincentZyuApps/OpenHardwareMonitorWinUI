@@ -1,3 +1,4 @@
+using System.Text.Json;
 using OpenHardwareMonitor.Core;
 
 namespace OpenHardwareMonitor.App.Tests;
@@ -87,6 +88,51 @@ public sealed class SettingsStoreTests
         Assert.True(settings.ExpandedNodes["/cpu/0"]);
         Assert.Equal(64, settings.ColumnWidths["Value"]);
         Assert.Equal(160, settings.ColumnWidths["Maximum"]);
+        Directory.Delete(root, true);
+    }
+
+    [Fact]
+    public async Task SaveCapturesStableSnapshotBeforeBackgroundWrite()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ohm-winui-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var store = new SettingsStore(root, Path.Combine(root, "local"));
+        var settings = await store.LoadAsync(forcePortable: true);
+        settings.Theme = ThemePreference.Dark;
+        settings.ExpandedNodes["/cpu/0"] = true;
+
+        var save = store.SaveAsync(settings);
+        settings.Theme = ThemePreference.Light;
+        settings.ExpandedNodes["/cpu/0"] = false;
+        await save;
+
+        var saved = JsonSerializer.Deserialize<AppSettings>(await File.ReadAllTextAsync(store.SettingsPath));
+        Assert.NotNull(saved);
+        Assert.Equal(ThemePreference.Dark, saved.Theme);
+        Assert.True(saved.ExpandedNodes["/cpu/0"]);
+        Directory.Delete(root, true);
+    }
+
+    [Fact]
+    public async Task SaveOmitsDefaultSensorPresentationAndCollapsedNodes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ohm-winui-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var store = new SettingsStore(root, Path.Combine(root, "local"));
+        var settings = await store.LoadAsync(forcePortable: true);
+        settings.Sensors["default"] = new SensorPresentationSettings();
+        settings.Sensors["charted"] = new SensorPresentationSettings { ShowInChart = true };
+        settings.ExpandedNodes["collapsed"] = false;
+        settings.ExpandedNodes["expanded"] = true;
+
+        await store.SaveAsync(settings);
+
+        var saved = JsonSerializer.Deserialize<AppSettings>(await File.ReadAllTextAsync(store.SettingsPath));
+        Assert.NotNull(saved);
+        Assert.False(saved.Sensors.ContainsKey("default"));
+        Assert.True(saved.Sensors["charted"].ShowInChart);
+        Assert.False(saved.ExpandedNodes.ContainsKey("collapsed"));
+        Assert.True(saved.ExpandedNodes["expanded"]);
         Directory.Delete(root, true);
     }
 }

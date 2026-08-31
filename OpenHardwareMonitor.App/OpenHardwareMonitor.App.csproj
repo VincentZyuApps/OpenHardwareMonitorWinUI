@@ -27,7 +27,15 @@
   <ItemGroup>
     <Content Include="..\OpenHardwareMonitor\Resources\icon.ico" Link="Assets\OpenHardwareMonitor.ico" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-  <Target Name="CopyProjectPriToPublish" AfterTargets="Publish" Condition="Exists('$(TargetDir)$(TargetName).pri')">
-    <Copy SourceFiles="$(TargetDir)$(TargetName).pri" DestinationFolder="$(PublishDir)" />
+  <Target Name="CopyWinUiResourcesToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_WinUiPriResource Include="$(TargetDir)$(TargetName).pri" Condition="Exists('$(TargetDir)$(TargetName).pri')" />
+      <_WinUiXbfResource Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_WinUiPriResource)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy
+      SourceFiles="@(_WinUiXbfResource)"
+      DestinationFiles="@(_WinUiXbfResource->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+      SkipUnchangedFiles="true" />
   </Target>
 </Project>

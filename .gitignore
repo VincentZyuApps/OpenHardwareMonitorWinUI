@@ -5,6 +5,8 @@
 .idea/
 .vs/
 .vscode/
+__pycache__/
+*.py[cod]
 packages/
 FodyWeavers.xsd
 artifacts/

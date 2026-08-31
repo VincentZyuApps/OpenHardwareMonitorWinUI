@@ -19,7 +19,10 @@ public sealed partial class MainWindow : WindowEx
     private bool _notificationIsPersistent;
     private bool _exitRequested;
     private bool _initialized;
+    private bool _resourcesCleaned;
     private bool _settingsReady;
+    private bool _shutdownInProgress;
+    private bool _shutdownReady;
     private GadgetWindow? _gadgetWindow;
 
     public MainWindow(MainViewModel viewModel)
@@ -77,7 +80,7 @@ public sealed partial class MainWindow : WindowEx
 
     private async void RefreshTimer_Tick(object? sender, object e)
     {
-        if (!ViewModel.IsHardwareToolbarBusy) await ViewModel.RefreshAsync();
+        if (!ViewModel.IsHardwareTreeBusy) await ViewModel.RefreshAsync();
     }
 
     private void Navigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -136,17 +139,30 @@ public sealed partial class MainWindow : WindowEx
     }
 
     public void ShowNotification(string message, InfoBarSeverity severity) =>
-        ShowNotificationCore(message, severity, persistent: false);
+        _ = ShowNotificationCore(message, severity, persistent: false);
 
-    public void ShowProgressNotification(string message) =>
+    public int ShowProgressNotification(string message) =>
         ShowNotificationCore(message, InfoBarSeverity.Informational, persistent: true);
+
+    public void CompleteProgressNotification(int token, string message, InfoBarSeverity severity)
+    {
+        if (token != _notificationVersion || !_notificationIsPersistent) return;
+        _ = ShowNotificationCore(message, severity, persistent: false);
+    }
+
+    public bool CancelProgressNotification(int token)
+    {
+        if (token != _notificationVersion || !_notificationIsPersistent) return false;
+        HideNotification();
+        return true;
+    }
 
     public void HideTransientNotification()
     {
         if (!_notificationIsPersistent) HideNotification();
     }
 
-    private void ShowNotificationCore(string message, InfoBarSeverity severity, bool persistent)
+    private int ShowNotificationCore(string message, InfoBarSeverity severity, bool persistent)
     {
         var wasOpen = NotificationBar.IsOpen;
         var version = ++_notificationVersion;
@@ -174,6 +190,7 @@ public sealed partial class MainWindow : WindowEx
         }
 
         if (!persistent) _ = HideNotificationAfterDelayAsync(version);
+        return version;
     }
 
     private void StartNotificationEntranceAnimation(int version)
@@ -263,11 +280,19 @@ public sealed partial class MainWindow : WindowEx
 
     private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
+        if (_shutdownReady) return;
         if (!_exitRequested && ViewModel.Settings.CloseToTray)
         {
             args.Cancel = true;
             HideToTray();
+            return;
         }
+
+        args.Cancel = true;
+        if (_shutdownInProgress) return;
+        _shutdownInProgress = true;
+        CleanupWindowResources();
+        _ = CompleteShutdownAsync();
     }
 
     private void AppWindow_Changed(AppWindow sender, AppWindowChangedEventArgs args)
@@ -344,20 +369,54 @@ public sealed partial class MainWindow : WindowEx
         Close();
     }
 
-    private async void MainWindow_Closed(object sender, WindowEventArgs args)
+    private async Task CompleteShutdownAsync()
     {
+        try
+        {
+            await ViewModel.FlushPendingSettingsAsync();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        try
+        {
+            await ViewModel.DisposeAsync();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+        }
+        finally
+        {
+            _shutdownReady = true;
+            Close();
+        }
+    }
+
+    private void CleanupWindowResources()
+    {
+        if (_resourcesCleaned) return;
+        _resourcesCleaned = true;
         _refreshTimer.Stop();
+        _refreshTimer.Tick -= RefreshTimer_Tick;
         _notificationVersion++;
         StopNotificationAnimation();
         foreach (var window in _hardwareInfoWindows.Values.ToArray()) window.Close();
         _hardwareInfoWindows.Clear();
         CloseGadget();
         TrayIcon.Dispose();
+        RootGrid.Loaded -= RootGrid_Loaded;
         AppWindow.Changed -= AppWindow_Changed;
         ViewModel.ThemeChanged -= ViewModel_ThemeChanged;
         ViewModel.SettingsLoaded -= ViewModel_SettingsLoaded;
-        await ViewModel.SaveSettingsAsync();
-        await ViewModel.DisposeAsync();
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        CleanupWindowResources();
+        AppWindow.Closing -= AppWindow_Closing;
+        Closed -= MainWindow_Closed;
         if (ReferenceEquals(Instance, this)) Instance = null;
     }
 }

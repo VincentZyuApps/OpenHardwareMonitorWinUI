@@ -39,7 +39,10 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="6">
-                    <FontIcon Width="16" FontSize="13" Glyph="{Binding Content.IconGlyph}" Opacity="0.85" />
+                    <Grid Width="16" Height="16">
+                        <FontIcon FontSize="13" Glyph="{Binding Content.IconGlyph}" Opacity="0.85" Visibility="{Binding Content.IsExpansionIdle, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <ProgressRing Width="14" Height="14" MinWidth="0" MinHeight="0" IsActive="{Binding Content.IsExpansionBusy}" Visibility="{Binding Content.IsExpansionBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    </Grid>
                     <TextBlock VerticalAlignment="Center" FontSize="13" Text="{Binding Content.Title}" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Orientation="Horizontal" Spacing="8">

@@ -30,6 +30,8 @@
 - `.github/workflows/release.yml` is the authoritative WinUI build workflow. It restores, tests, publishes a self-contained x64 app, and uploads a ZIP plus SHA-256 checksum.
 - `[build-action]` in a commit message produces a downloadable Actions artifact.
 - `[build-release]` on `master` additionally creates a versioned GitHub release. Keep the version fields in `Directory.Build.props` consistent; `python scripts/version/check.py` verifies them.
+- Never edit the individual version fields by hand. Use `python scripts/version/bump.py <target-version>` to update every managed field together, then run `python scripts/version/bump.py <target-version> --check` and `python scripts/version/check.py` to verify the result. Example: `python scripts/version/bump.py 4.0.1-alpha.2`.
+- The bump script owns the WinUI product version only. Do not use it to rewrite the independent assembly versions of the upstream hardware library, the excluded legacy WinForms project, or third-party controls.
 
 ## Temporary Files
 

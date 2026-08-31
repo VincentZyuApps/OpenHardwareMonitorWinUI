@@ -47,25 +47,108 @@ public sealed class SettingsStore
         return created;
     }
 
-    public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
+    public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken = default)
     {
-        await _saveLock.WaitAsync(cancellationToken);
+        Normalize(settings);
+        return SaveSnapshotAsync(CreateSnapshot(settings), cancellationToken);
+    }
+
+    private async Task SaveSnapshotAsync(AppSettings settings, CancellationToken cancellationToken)
+    {
+        await _saveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         string? temporaryPath = null;
         try
         {
-            Normalize(settings);
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath) ?? LocalAppDataDirectory);
-            temporaryPath = SettingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            await using (var stream = File.Create(temporaryPath))
-                await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken);
-            File.Move(temporaryPath, SettingsPath, true);
+            await Task.Run(async () =>
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath) ?? LocalAppDataDirectory);
+                temporaryPath = SettingsPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(temporaryPath))
+                    await JsonSerializer.SerializeAsync(stream, settings, JsonOptions, cancellationToken).ConfigureAwait(false);
+                File.Move(temporaryPath, SettingsPath, true);
+            }, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            if (temporaryPath is not null && File.Exists(temporaryPath)) File.Delete(temporaryPath);
-            _saveLock.Release();
+            try
+            {
+                if (temporaryPath is not null && File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
+            finally
+            {
+                _saveLock.Release();
+            }
         }
     }
+
+    private static AppSettings CreateSnapshot(AppSettings source) => new()
+    {
+        SchemaVersion = source.SchemaVersion,
+        Theme = source.Theme,
+        IsPortable = source.IsPortable,
+        CloseToTray = source.CloseToTray,
+        StartMinimized = source.StartMinimized,
+        GadgetEnabled = source.GadgetEnabled,
+        ChartSelectionInitialized = source.ChartSelectionInitialized,
+        ShowHiddenSensors = source.ShowHiddenSensors,
+        ShowValueColumn = source.ShowValueColumn,
+        ShowMinimumColumn = source.ShowMinimumColumn,
+        ShowMaximumColumn = source.ShowMaximumColumn,
+        NavigationPaneOpen = source.NavigationPaneOpen,
+        RefreshIntervalMilliseconds = source.RefreshIntervalMilliseconds,
+        Window = new WindowSettings
+        {
+            Width = source.Window.Width,
+            Height = source.Window.Height
+        },
+        HardwareInfoWindow = new WindowPlacementSettings
+        {
+            Width = source.HardwareInfoWindow.Width,
+            Height = source.HardwareInfoWindow.Height,
+            X = source.HardwareInfoWindow.X,
+            Y = source.HardwareInfoWindow.Y
+        },
+        Hardware = new HardwareSettings
+        {
+            Motherboard = source.Hardware.Motherboard,
+            Cpu = source.Hardware.Cpu,
+            Memory = source.Hardware.Memory,
+            Gpu = source.Hardware.Gpu,
+            Storage = source.Hardware.Storage,
+            Network = source.Hardware.Network,
+            Battery = source.Hardware.Battery,
+            Controller = source.Hardware.Controller,
+            Psu = source.Hardware.Psu
+        },
+        Logging = new LoggingSettings
+        {
+            Enabled = source.Logging.Enabled,
+            IntervalSeconds = source.Logging.IntervalSeconds,
+            Directory = source.Logging.Directory
+        },
+        WebServer = new WebServerSettings
+        {
+            Enabled = source.WebServer.Enabled,
+            Host = source.WebServer.Host,
+            Port = source.WebServer.Port,
+            RequireAuthentication = source.WebServer.RequireAuthentication,
+            UserName = source.WebServer.UserName,
+            PasswordSha256 = source.WebServer.PasswordSha256
+        },
+        Sensors = source.Sensors.ToDictionary(
+            pair => pair.Key,
+            pair => new SensorPresentationSettings
+            {
+                IsHidden = pair.Value.IsHidden,
+                ShowInTray = pair.Value.ShowInTray,
+                ShowInGadget = pair.Value.ShowInGadget,
+                ShowInChart = pair.Value.ShowInChart,
+                DisplayName = pair.Value.DisplayName
+            },
+            StringComparer.OrdinalIgnoreCase),
+        ExpandedNodes = new Dictionary<string, bool>(source.ExpandedNodes, StringComparer.OrdinalIgnoreCase),
+        ColumnWidths = new Dictionary<string, int>(source.ColumnWidths, StringComparer.OrdinalIgnoreCase)
+    };
 
     private static void Normalize(AppSettings settings)
     {
@@ -93,6 +176,16 @@ public sealed class SettingsStore
         settings.Sensors ??= new Dictionary<string, SensorPresentationSettings>(StringComparer.OrdinalIgnoreCase);
         settings.ExpandedNodes ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         settings.ColumnWidths ??= new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sensorId in settings.Sensors
+                     .Where(pair => IsDefault(pair.Value))
+                     .Select(pair => pair.Key)
+                     .ToArray())
+            settings.Sensors.Remove(sensorId);
+        foreach (var nodeId in settings.ExpandedNodes
+                     .Where(pair => !pair.Value)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+            settings.ExpandedNodes.Remove(nodeId);
         foreach (var column in settings.ColumnWidths.Keys.ToArray())
             settings.ColumnWidths[column] = Math.Clamp(
                 settings.ColumnWidths[column],
@@ -106,4 +199,11 @@ public sealed class SettingsStore
         settings.Logging.IntervalSeconds = Math.Clamp(settings.Logging.IntervalSeconds, 1, 3600);
         settings.WebServer.Port = Math.Clamp(settings.WebServer.Port, 1024, 65535);
     }
+
+    private static bool IsDefault(SensorPresentationSettings settings) =>
+        !settings.IsHidden &&
+        !settings.ShowInTray &&
+        !settings.ShowInGadget &&
+        !settings.ShowInChart &&
+        string.IsNullOrWhiteSpace(settings.DisplayName);
 }

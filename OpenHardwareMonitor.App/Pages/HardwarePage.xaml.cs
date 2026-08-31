@@ -21,16 +21,20 @@ public sealed partial class HardwarePage : Page
     private double _resizeStartX;
     private double _resizeStartWidth;
     private int _searchVersion;
+    private int _navigationGeneration;
+    private int? _activeProgressNotificationToken;
     private readonly DispatcherTimer _searchDebounceTimer = new() { Interval = TimeSpan.FromMilliseconds(350) };
 
     public HardwarePage()
     {
         InitializeComponent();
+        NavigationCacheMode = NavigationCacheMode.Required;
         _searchDebounceTimer.Tick += SearchDebounceTimer_Tick;
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
     {
+        _navigationGeneration++;
         DataContext = e.Parameter as MainViewModel;
         if (ViewModel is null) return;
         _boundRootNodes = ViewModel.HardwareTreeNodes;
@@ -42,9 +46,19 @@ public sealed partial class HardwarePage : Page
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
+        _navigationGeneration++;
         _searchDebounceTimer.Stop();
         _searchVersion++;
-        MainWindow.Instance?.HideTransientNotification();
+        if (_activeProgressNotificationToken is { } token)
+        {
+            if (MainWindow.Instance?.CancelProgressNotification(token) != true)
+                MainWindow.Instance?.HideTransientNotification();
+            _activeProgressNotificationToken = null;
+        }
+        else
+        {
+            MainWindow.Instance?.HideTransientNotification();
+        }
         if (ViewModel is not null) ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
         if (_boundRootNodes is not null) _boundRootNodes.CollectionChanged -= HardwareTreeNodes_CollectionChanged;
         _boundRootNodes = null;
@@ -66,9 +80,19 @@ public sealed partial class HardwarePage : Page
     {
         if (_boundRootNodes is null) return;
         var desired = _boundRootNodes.ToArray();
-        if (HardwareTree.RootNodes.SequenceEqual(desired)) return;
-        HardwareTree.RootNodes.Clear();
-        foreach (var node in desired) HardwareTree.RootNodes.Add(node);
+        var desiredNodes = desired.ToHashSet(ReferenceEqualityComparer.Instance);
+        for (var index = HardwareTree.RootNodes.Count - 1; index >= 0; index--)
+        {
+            if (!desiredNodes.Contains(HardwareTree.RootNodes[index])) HardwareTree.RootNodes.RemoveAt(index);
+        }
+        for (var index = 0; index < desired.Length; index++)
+        {
+            if (index < HardwareTree.RootNodes.Count && ReferenceEquals(HardwareTree.RootNodes[index], desired[index])) continue;
+            var currentIndex = HardwareTree.RootNodes.IndexOf(desired[index]);
+            if (currentIndex >= 0) HardwareTree.RootNodes.RemoveAt(currentIndex);
+            HardwareTree.RootNodes.Insert(index, desired[index]);
+        }
+        ViewModel?.ApplyDesiredRootExpansions();
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
@@ -131,7 +155,8 @@ public sealed partial class HardwarePage : Page
         Func<string> successMessage)
     {
         if (ViewModel is not { } viewModel || !viewModel.TryBeginHardwareToolbarOperation(operation)) return;
-        MainWindow.Instance?.ShowProgressNotification(progressMessage);
+        var notificationToken = MainWindow.Instance?.ShowProgressNotification(progressMessage);
+        _activeProgressNotificationToken = notificationToken;
         await Task.Yield();
 
         string message;
@@ -156,19 +181,25 @@ public sealed partial class HardwarePage : Page
             viewModel.EndHardwareToolbarOperation(operation);
         }
 
-        MainWindow.Instance?.ShowNotification(message, severity);
+        if (notificationToken is { } token)
+            MainWindow.Instance?.CompleteProgressNotification(token, message, severity);
+        else
+            MainWindow.Instance?.ShowNotification(message, severity);
+        if (_activeProgressNotificationToken == notificationToken) _activeProgressNotificationToken = null;
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(MainViewModel.ActiveHardwareToolbarOperation) or nameof(MainViewModel.IsHardwareToolbarBusy))
+        if (e.PropertyName is nameof(MainViewModel.ActiveHardwareToolbarOperation) or
+            nameof(MainViewModel.IsHardwareToolbarBusy) or
+            nameof(MainViewModel.IsHardwareTreeBusy))
             UpdateToolbarOperationState();
     }
 
     private void UpdateToolbarOperationState()
     {
         var operation = ViewModel?.ActiveHardwareToolbarOperation ?? HardwareToolbarOperation.None;
-        var busy = operation != HardwareToolbarOperation.None;
+        var busy = ViewModel?.IsHardwareTreeBusy == true;
         RefreshButton.IsEnabled = !busy;
         ShowHiddenSensorsButton.IsEnabled = !busy;
         ExpandAllButton.IsEnabled = !busy;
@@ -205,7 +236,7 @@ public sealed partial class HardwarePage : Page
     {
         _searchDebounceTimer.Stop();
         if (ViewModel is null) return;
-        if (ViewModel.IsHardwareToolbarBusy)
+        if (ViewModel.IsHardwareTreeBusy)
         {
             _searchDebounceTimer.Start();
             return;
@@ -219,6 +250,7 @@ public sealed partial class HardwarePage : Page
         try
         {
             await viewModel.SetSensorFilterAsync(query);
+            SyncRootNodes();
         }
         catch (Exception exception)
         {
@@ -228,7 +260,7 @@ public sealed partial class HardwarePage : Page
         }
         if (version != _searchVersion || !showResult || query.Length == 0) return;
 
-        var (sensorCount, hardwareCount) = CountFilteredItems(viewModel.HardwareTreeNodes);
+        var (sensorCount, hardwareCount) = viewModel.CountProjectedTreeItems();
         if (sensorCount > 0)
         {
             var hardwareSuffix = hardwareCount > 0 ? $"，来自 {hardwareCount} 个硬件" : string.Empty;
@@ -244,24 +276,6 @@ public sealed partial class HardwarePage : Page
         }
     }
 
-    private static (int SensorCount, int HardwareCount) CountFilteredItems(IEnumerable<TreeViewNode> roots)
-    {
-        var sensorCount = 0;
-        var hardwareCount = 0;
-        foreach (var root in roots) CountFilteredItems(root, ref sensorCount, ref hardwareCount);
-        return (sensorCount, hardwareCount);
-    }
-
-    private static void CountFilteredItems(TreeViewNode node, ref int sensorCount, ref int hardwareCount)
-    {
-        if (node.Content is HardwareTreeItemViewModel item)
-        {
-            if (item.IsSensor) sensorCount++;
-            else if (item.Kind == MonitorTreeNodeKind.Hardware) hardwareCount++;
-        }
-        foreach (var child in node.Children) CountFilteredItems(child, ref sensorCount, ref hardwareCount);
-    }
-
     private void ShowNotification(string message, InfoBarSeverity severity)
         => MainWindow.Instance?.ShowNotification(message, severity);
 
@@ -270,12 +284,74 @@ public sealed partial class HardwarePage : Page
 
     private async void HardwareTree_Expanding(TreeView sender, TreeViewExpandingEventArgs args)
     {
-        if (ViewModel is not null) await ViewModel.SetTreeNodeExpandedAsync(args.Node, true);
+        if (ViewModel is not { } viewModel || args.Node.Content is not HardwareTreeItemViewModel item) return;
+
+        TreeNodeExpansionRequest? request;
+        try
+        {
+            request = viewModel.BeginTreeNodeExpansion(args.Node);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+            ShowNotification($"无法开始展开“{item.Title}”: {exception.Message}", InfoBarSeverity.Error);
+            return;
+        }
+        if (request is null) return;
+
+        var navigationGeneration = _navigationGeneration;
+        int? notificationToken = null;
+        var outcome = TreeNodeExpansionOutcome.Canceled;
+        string? errorMessage = null;
+
+        try
+        {
+            if (request.UserInitiated)
+            {
+                notificationToken = MainWindow.Instance?.ShowProgressNotification($"正在展开“{item.Title}”...");
+                if (notificationToken is not null) _activeProgressNotificationToken = notificationToken;
+            }
+            await Task.Delay(32, request.Token);
+            outcome = await viewModel.RealizeTreeNodeChildrenAsync(request);
+        }
+        catch (OperationCanceledException) when (request.Token.IsCancellationRequested)
+        {
+            outcome = TreeNodeExpansionOutcome.Canceled;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+            errorMessage = exception.Message;
+        }
+        finally
+        {
+            viewModel.EndTreeNodeExpansion(request);
+        }
+
+        if (!request.UserInitiated || navigationGeneration != _navigationGeneration) return;
+        if (notificationToken is not { } token) return;
+
+        if (errorMessage is not null)
+            MainWindow.Instance?.CompleteProgressNotification(token, $"无法加载“{item.Title}”: {errorMessage}", InfoBarSeverity.Error);
+        else if (outcome is TreeNodeExpansionOutcome.Completed or TreeNodeExpansionOutcome.AlreadyRealized)
+            MainWindow.Instance?.CompleteProgressNotification(token, $"已展开“{item.Title}”", InfoBarSeverity.Success);
+        else
+            MainWindow.Instance?.CancelProgressNotification(token);
+        if (_activeProgressNotificationToken == notificationToken) _activeProgressNotificationToken = null;
     }
 
-    private async void HardwareTree_Collapsed(TreeView sender, TreeViewCollapsedEventArgs args)
+    private void HardwareTree_Collapsed(TreeView sender, TreeViewCollapsedEventArgs args)
     {
-        if (ViewModel is not null) await ViewModel.SetTreeNodeExpandedAsync(args.Node, false);
+        try
+        {
+            if (ViewModel?.SetTreeNodeCollapsed(args.Node) == true)
+                sender.SelectedNode = args.Node;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(exception);
+            ShowNotification($"无法折叠节点: {exception.Message}", InfoBarSeverity.Error);
+        }
     }
 
     private void HardwareTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs args) => ViewModel?.SelectTreeItem(args.InvokedItem);
