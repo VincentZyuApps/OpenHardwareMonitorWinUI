@@ -7,7 +7,11 @@
 > **[📖 English](README.en-us.md)**
 > **[📖 简体中文（中国大陆）](README.md)**
 
-[![Build](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml) [![Release](https://img.shields.io/github/v/release/VincentZyuApps/OpenHardwareMonitorWinUI?include_prereleases&sort=semver)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest) [![Downloads](https://img.shields.io/github/downloads/VincentZyuApps/OpenHardwareMonitorWinUI/total)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases) ![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4?logo=windows11&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
+[![Build](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/VincentZyuApps/OpenHardwareMonitorWinUI?include_prereleases&sort=semver&logo=github&logoColor=white)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/VincentZyuApps/OpenHardwareMonitorWinUI/total?logo=github&logoColor=white)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases)
+![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4.svg?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6TTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgweiBNMTIuNjIzIDEyLjYyM0gyNFYyNEgxMi42MjN6IiBmaWxsPSIjZmZmIi8+PC9zdmc+)
+![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 
 Open Hardware Monitor WinUI is an experimental, independent WinUI 3 desktop application for Windows. It presents hardware sensor data such as temperatures, fan speeds, voltages, loads, and clock speeds in a compact Fluent interface.
 
