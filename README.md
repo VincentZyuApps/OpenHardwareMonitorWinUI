@@ -4,18 +4,17 @@
 
 # 🖥️ Open Hardware Monitor WinUI
 
-<p align="center">
-  <strong>简体中文</strong> · <a href="README.en-us.md">English</a>
-</p>
+> **[📖 English](README.en-us.md)**
+> **[📖 简体中文（中国大陆）](README.md)**
 
-[![Build](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/actions/workflows/release.yml) [![Release](https://img.shields.io/github/v/release/VincentZyu233/OpenHardwareMonitorWinUI?include_prereleases&sort=semver)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases/latest) [![Downloads](https://img.shields.io/github/downloads/VincentZyu233/OpenHardwareMonitorWinUI/total)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases) ![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4?logo=windows11&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
+[![Build](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml) [![Release](https://img.shields.io/github/v/release/VincentZyuApps/OpenHardwareMonitorWinUI?include_prereleases&sort=semver)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest) [![Downloads](https://img.shields.io/github/downloads/VincentZyuApps/OpenHardwareMonitorWinUI/total)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases) ![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4?logo=windows11&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 
 Open Hardware Monitor WinUI 是一个面向 Windows 的实验性独立 WinUI 3 桌面应用，以紧凑的 Fluent 界面展示温度、风扇转速、电压、负载、频率等硬件传感器数据。
 
 它复用[当前上游项目](https://github.com/HardwareMonitor/openhardwaremonitor)的 `OpenHardwareMonitorLib` 硬件采集层，但完全重写了 UI 与配置系统；它不会读取、导入或迁移旧 WinForms 应用的 XML 配置。
 
 > [!WARNING]
-> 当前版本仍处于 Alpha 实验阶段，行为与设备支持可能变化。请在自己的硬件上核对传感器读数，并谨慎使用硬件控制功能。
+> 当前版本仍处于不稳定测试阶段，界面布局、程序行为与设备支持仍可能变化。请在自己的硬件上核对传感器读数，并谨慎使用硬件控制功能。
 
 ## ✨ 功能亮点
 
@@ -68,7 +67,7 @@ Open Hardware Monitor WinUI 是一个面向 Windows 的实验性独立 WinUI 3 �
 
 ## ⬇️ 下载与运行
 
-1. 打开 [Releases](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases/latest)。
+1. 打开 [Releases](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest)。
 2. 下载最新的 `OpenHardwareMonitor-*-win-x64.zip`；需要时同时下载对应的 `.sha256` 文件。
 3. 将 ZIP 完整解压到可写目录，不要直接在压缩包内运行。
 4. 启动 `OpenHardwareMonitorWinUI.exe` 并接受 UAC 提权提示。
@@ -96,7 +95,7 @@ WinUI 应用使用全新的 JSON 配置，与旧 WinForms 配置完全独立。
 准备 Windows x64、Git 与 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)，然后运行：
 
 ```powershell
-git clone https://github.com/VincentZyu233/OpenHardwareMonitorWinUI.git
+git clone https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI.git
 cd OpenHardwareMonitorWinUI
 dotnet build OpenHardwareMonitor.App/OpenHardwareMonitor.App.csproj -c Debug
 dotnet test OpenHardwareMonitor.App.Tests/OpenHardwareMonitor.App.Tests.csproj -c Debug

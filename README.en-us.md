@@ -4,18 +4,17 @@
 
 # 🖥️ Open Hardware Monitor WinUI
 
-<p align="center">
-  <a href="README.md">简体中文</a> · <strong>English</strong>
-</p>
+> **[📖 English](README.en-us.md)**
+> **[📖 简体中文（中国大陆）](README.md)**
 
-[![Build](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/actions/workflows/release.yml) [![Release](https://img.shields.io/github/v/release/VincentZyu233/OpenHardwareMonitorWinUI?include_prereleases&sort=semver)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases/latest) [![Downloads](https://img.shields.io/github/downloads/VincentZyu233/OpenHardwareMonitorWinUI/total)](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases) ![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4?logo=windows11&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
+[![Build](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml/badge.svg?branch=master)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/actions/workflows/release.yml) [![Release](https://img.shields.io/github/v/release/VincentZyuApps/OpenHardwareMonitorWinUI?include_prereleases&sort=semver)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest) [![Downloads](https://img.shields.io/github/downloads/VincentZyuApps/OpenHardwareMonitorWinUI/total)](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases) ![Windows](https://img.shields.io/badge/Windows-10%202004%2B%20%7C%20x64-0078D4?logo=windows11&logoColor=white) ![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet&logoColor=white)
 
 Open Hardware Monitor WinUI is an experimental, independent WinUI 3 desktop application for Windows. It presents hardware sensor data such as temperatures, fan speeds, voltages, loads, and clock speeds in a compact Fluent interface.
 
 It reuses the `OpenHardwareMonitorLib` acquisition layer from the [current upstream project](https://github.com/HardwareMonitor/openhardwaremonitor), while completely rewriting the UI and configuration system. It does not read, import, or migrate the legacy WinForms application's XML configuration.
 
 > [!WARNING]
-> This Alpha release remains experimental, and behavior or device support may change. Verify sensor readings on your own hardware and use hardware controls with care.
+> The current release remains in an unstable testing stage. UI layout, application behavior, and device support may change. Verify sensor readings on your own hardware and use hardware controls with care.
 
 ## ✨ Feature Highlights
 
@@ -68,7 +67,7 @@ Available sensors and controls depend on support from the motherboard, device, d
 
 ## ⬇️ Download and Run
 
-1. Open [Releases](https://github.com/VincentZyu233/OpenHardwareMonitorWinUI/releases/latest).
+1. Open [Releases](https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI/releases/latest).
 2. Download the latest `OpenHardwareMonitor-*-win-x64.zip`; also download its `.sha256` file when verification is needed.
 3. Extract the complete ZIP to a writable directory instead of running it from inside the archive.
 4. Launch `OpenHardwareMonitorWinUI.exe` and accept the UAC elevation prompt.
@@ -96,7 +95,7 @@ Before the first launch, place an empty `.portable` file beside the executable o
 Prepare Windows x64, Git, and the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0), then run:
 
 ```powershell
-git clone https://github.com/VincentZyu233/OpenHardwareMonitorWinUI.git
+git clone https://github.com/VincentZyuApps/OpenHardwareMonitorWinUI.git
 cd OpenHardwareMonitorWinUI
 dotnet build OpenHardwareMonitor.App/OpenHardwareMonitor.App.csproj -c Debug
 dotnet test OpenHardwareMonitor.App.Tests/OpenHardwareMonitor.App.Tests.csproj -c Debug
